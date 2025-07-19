@@ -18,5 +18,5 @@ jobs:
       - name: Run availability check
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          ONLY_CHAT_ID: ${{ secrets.TELEGRAM_TOKEN }}
+          ONLY_CHAT_ID: ${{ secrets.ONLY_CHAT_ID }}
         run: node checkNext7Days.js
