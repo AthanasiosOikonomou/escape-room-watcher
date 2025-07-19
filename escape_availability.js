@@ -120,7 +120,11 @@ async function checkRoomAvailability(page, room) {
 
   const rooms = JSON.parse(fs.readFileSync(ROOMS_FILE, "utf8"));
 
-  const browser = await puppeteer.launch({ headless: true });
+const browser = await puppeteer.launch({
+  headless: true,
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+});
+
   const limit = pLimit(MAX_CONCURRENT_REQUESTS);
 
   const results = await Promise.all(
