@@ -1,7 +1,7 @@
-const puppeteer = require("puppeteer");
-const fs = require("fs");
-const pLimit = require("p-limit");
-const axios = require("axios");
+import puppeteer from "puppeteer";
+import fs from "fs";
+import pLimit from "p-limit";
+import axios from "axios";
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ONLY_CHAT_ID = process.env.ONLY_CHAT_ID;
