@@ -1,0 +1,22 @@
+name: Escape Room Availability Check
+
+on:
+  schedule:
+    - cron: "0 */2 * * *" # every 2 hours
+
+jobs:
+  check-availability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+      - name: Install dependencies
+        run: npm install
+      - name: Run availability check
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          ONLY_CHAT_ID: ${{ secrets.TELEGRAM_TOKEN }}
+        run: node checkNext7Days.js
