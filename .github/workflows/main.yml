@@ -20,4 +20,4 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           ONLY_CHAT_ID: ${{ secrets.ONLY_CHAT_ID }}
-        run: node checkNext7Days.js
+        run: node escape_availability.js
