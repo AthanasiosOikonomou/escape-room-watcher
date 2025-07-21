@@ -18,5 +18,41 @@
 {
   "name": "You are Next",
   "url": "https://www.escapeall.gr/en/EscapeRoom/Details/you-are-next"
-}
+},
+   {
+    "name": "Scream",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/scream"
+  },
+  {
+    "name": "Lights Out Brainiac",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/lights-out-brainiac"
+  },
+  {
+    "name": "Jack Outside the Box",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/jack-outside-the-box"
+  },
+  {
+    "name": "Alien",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/alien"
+  },
+  {
+    "name": "Prison Break",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/prison-break"
+  },
+  {
+    "name": "Hell Hole Monastery",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/hell-hole-monastery"
+  },
+  {
+    "name": "Antique",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/antique"
+  },
+  {
+    "name": "Le Diner",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/le-diner"
+  },
+  {
+    "name": "Lunacy",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/lunacy"
+  }
 ]
