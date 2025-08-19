@@ -3,7 +3,7 @@ name: Escape Room Availability Check
 on:
   workflow_dispatch:       # allow manual runs from GitHub UI
   schedule:
-    - cron: '0 */2 * * *'  # every 2 hours
+    - cron: '*/30 * * * *' # every 30 minutes
 
 jobs:
   check-availability:
