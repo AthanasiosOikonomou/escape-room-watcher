@@ -37,7 +37,7 @@ async function checkRoomAvailability(page, room) {
 
   const roomAvailability = {}; // { "DD/MM/YYYY": ["HH:mm", ...] }
 
-  for (let offset = 0; offset <= 14; offset++)
+  for (let offset = 0; offset <= 14; offset++){
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
 
