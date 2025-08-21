@@ -133,6 +133,10 @@ const browser = await puppeteer.launch({
         const page = await browser.newPage();
         try {
           const availability = await checkRoomAvailability(page, room);
+
+           // 🕒 Add random delay between 1–3 seconds
+          await new Promise(res => setTimeout(res, 1000 + Math.random() * 2000));
+          
           return { roomName: room.name, availability };
         } catch (err) {
           console.error(`❌ Error checking room ${room.name}:`, err.message);
