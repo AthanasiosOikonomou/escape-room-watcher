@@ -1,56 +1,46 @@
 import puppeteer from "puppeteer";
-import fs from "fs";
+import fs from "fs/promises";
 import pLimit from "p-limit";
 import axios from "axios";
 
+// --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ONLY_CHAT_ID = process.env.ONLY_CHAT_ID;
 const ROOMS_FILE = "./roomsToWatch.json";
 
-// Configuration - tweak these for politeness vs speed
-const DAYS_AHEAD = process.env.DAYS_AHEAD ? Number(process.env.DAYS_AHEAD) : 14; // check up to N days ahead (0..N)
-const MAX_CONCURRENT_REQUESTS = process.env.MAX_CONCURRENT_REQUESTS
-  ? Number(process.env.MAX_CONCURRENT_REQUESTS)
-  : 1; // how many pages in parallel (conservative)
-const STAGGER_MS = process.env.STAGGER_MS
-  ? Number(process.env.STAGGER_MS)
-  : 3500; // stagger start between rooms (~3.5s, human-like)
-const MIN_DELAY_BETWEEN_ROOMS_MS = process.env.MIN_DELAY_BETWEEN_ROOMS_MS
-  ? Number(process.env.MIN_DELAY_BETWEEN_ROOMS_MS)
-  : 4500; // wait at least this between room checks (~4.5s)
-const RANDOM_EXTRA_DELAY_MS = process.env.RANDOM_EXTRA_DELAY_MS
-  ? Number(process.env.RANDOM_EXTRA_DELAY_MS)
-  : 1500; // additional random delay (up to ~1.5s)
-// Per-day timing (tweak to speed up or be more polite)
-const DAY_CHECK_BASE_MS = process.env.DAY_CHECK_BASE_MS
-  ? Number(process.env.DAY_CHECK_BASE_MS)
-  : 2000; // base pause between checking days (~2s)
-const DAY_CHECK_JITTER_MS = process.env.DAY_CHECK_JITTER_MS
-  ? Number(process.env.DAY_CHECK_JITTER_MS)
-  : 1500; // jitter added to base per-day pause (~0-1.5s)
-const TIME_LIST_WAIT_MS = process.env.TIME_LIST_WAIT_MS
-  ? Number(process.env.TIME_LIST_WAIT_MS)
-  : 1500; // how long to wait for time list to change after clicking (ms)
-// Global rate limit to avoid temporary bans. This enforces a minimum interval
-// between any two requests that likely hit the server (navigation or day click).
-const GLOBAL_MIN_REQUEST_INTERVAL_MS = process.env
-  .GLOBAL_MIN_REQUEST_INTERVAL_MS
-  ? Number(process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS)
-  : 2000; // default ~2s between server-impacting requests (human-like)
+// Politeness and Speed Configuration (Optimized)
+const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
+const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 2); // Increased concurrency
+const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500); // Shorter initial stagger
+const MIN_DELAY_BETWEEN_CHECKS_MS = Number(
+  process.env.MIN_DELAY_BETWEEN_ROOMS_MS ?? 2500
+); // Shorter minimum delay between rooms
+const RANDOM_EXTRA_DELAY_MS = Number(process.env.RANDOM_EXTRA_DELAY_MS ?? 1000); // Jitter (up to 1s)
+const DAY_CHECK_BASE_MS = Number(process.env.DAY_CHECK_BASE_MS ?? 800); // Shorter base pause between checking days
+const DAY_CHECK_JITTER_MS = Number(process.env.DAY_CHECK_JITTER_MS ?? 500); // Jitter added to base per-day pause
+const TIME_LIST_WAIT_MS = Number(process.env.TIME_LIST_WAIT_MS ?? 2000); // Max wait for time list to change
+const GLOBAL_MIN_REQUEST_INTERVAL_MS = Number(
+  process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS ?? 1000
+); // Shorter min interval between server-impacting requests
 
+// CRITICAL: Fast fail if the calendar doesn't load quickly
+const CALENDAR_WAIT_TIMEOUT_MS = 2500;
+
+// --- Global Rate Limiter (State and Function) ---
 let _lastRequestAt = 0;
 async function enforceGlobalRateLimit() {
-  if (!GLOBAL_MIN_REQUEST_INTERVAL_MS || GLOBAL_MIN_REQUEST_INTERVAL_MS <= 0)
-    return;
+  if (GLOBAL_MIN_REQUEST_INTERVAL_MS <= 0) return;
   const now = Date.now();
   const nextAllowed = _lastRequestAt + GLOBAL_MIN_REQUEST_INTERVAL_MS;
   if (now < nextAllowed) {
     const wait = nextAllowed - now;
-    console.log(`(rate-limit) waiting ${wait}ms to respect global interval`);
+    // console.log(`(rate-limit) waiting ${wait}ms to respect global interval`);
     await sleep(wait);
   }
   _lastRequestAt = Date.now();
 }
+
+// --- Telegram & Utility Functions (Unchanged) ---
 const TELEGRAM_API = TELEGRAM_TOKEN
   ? `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`
   : null;
@@ -74,12 +64,6 @@ async function sendToTelegram(message) {
   }
 }
 
-// === Date format helpers ===
-const today = new Date();
-const formatDay = (d) => d.getDate().toString();
-const formatMonth = (d) => (d.getMonth() + 1).toString();
-const formatYear = (d) => d.getFullYear().toString();
-
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -90,22 +74,21 @@ function randomInt(max) {
 
 function generateUserAgent() {
   const agents = [
-    // short list; extend as needed
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
   ];
   return agents[randomInt(agents.length)];
 }
 
 async function withRetries(fn, attempts = 3, baseDelay = 1000) {
-  let attempt = 0;
-  while (attempt < attempts) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      attempt++;
-      if (attempt >= attempts) throw err;
+      if (attempt === attempts) throw err;
       const wait = baseDelay * Math.pow(2, attempt - 1) + randomInt(500);
       console.warn(
         `Retry ${attempt}/${attempts} after ${wait}ms: ${err.message}`
@@ -115,49 +98,77 @@ async function withRetries(fn, attempts = 3, baseDelay = 1000) {
   }
 }
 
-// === Puppeteer: Check availability for one room (collect data, no sending here) ===
+// === Date format helpers (Unchanged) ===
+const today = new Date();
+const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+const formatDay = (d) => d.getDate().toString();
+const formatMonth = (d) => (d.getMonth() + 1).toString();
+const formatYear = (d) => d.getFullYear().toString();
+
+// === Puppeteer: Check availability for one room ===
 async function checkRoomAvailability(page, room) {
-  console.log(`\n🔍 Checking room: ${room.name}`);
+  // console.log(`\n🔍 Checking room: ${room.name} (${room.url})`);
+
+  await page.setUserAgent(generateUserAgent());
 
   await withRetries(
     async () => {
-      // respect global rate limiter before navigation
       await enforceGlobalRateLimit();
-      await page.goto(room.url, { waitUntil: "networkidle2", timeout: 30000 });
+      await page.goto(room.url, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
     },
     3,
-    1500
+    2000
   );
 
-  // If `.dateCell` is missing it likely means booking is not available for this room right now.
-  // In that case skip this room instead of retrying.
+  // Human-like pause after loading
+  await sleep(randomInt(500) + 200);
+
+  const dateCellSelector =
+    ".dateCell, .date-cell, [data-day], .time-selection, .calendar";
+
+  // console.log(
+  //   `[DEBUG] Room: ${room.name} | Waiting for selector: ${dateCellSelector}`
+  // );
+
   try {
-    await page.waitForSelector(".dateCell", { timeout: 8000 });
-  } catch (err) {
-    console.warn(
-      `.dateCell not found for ${room.name}; skipping room (likely not open for booking)`
-    );
-    return {}; // skip this room
+    // CRITICAL: Reduced timeout for fast-fail on calendar check
+    await page.waitForSelector(dateCellSelector, {
+      timeout: CALENDAR_WAIT_TIMEOUT_MS,
+    });
+  } catch (e) {
+    // console.warn(
+    //   `❌ Calendar element not rendered within ${CALENDAR_WAIT_TIMEOUT_MS}ms for ${room.name}. Skipping check.`
+    // );
+    return {};
   }
 
-  const roomAvailability = {}; // { "DD/MM/YYYY": ["HH:mm", ...] }
+  const roomAvailability = {};
 
   for (let offset = 0; offset <= DAYS_AHEAD; offset++) {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
 
     const dayStart = Date.now();
+    const [day, month, year] = dateFormatter
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => part.value);
 
-    const day = formatDay(date);
-    const month = formatMonth(date);
-    const year = formatYear(date);
     const dateStr = `${day}/${month}/${year}`;
 
-    const daySelector = `.dateCell[data-day="${day}"][data-month="${month}"][data-year="${year}"]`;
+    const daySelector = `[data-day="${formatDay(
+      date
+    )}"][data-month="${formatMonth(date)}"][data-year="${formatYear(date)}"]`;
     const dayElement = await page.$(daySelector);
 
     if (!dayElement) {
-      console.log(`❌ Day ${dateStr} not found for ${room.name}`);
       continue;
     }
 
@@ -170,138 +181,156 @@ async function checkRoomAvailability(page, room) {
     );
 
     if (isDisabled) {
-      console.log(`⛔ Day ${dateStr} is disabled/unavailable for ${room.name}`);
       continue;
     }
 
+    // Scroll and pause before clicking (more human-like)
     await dayElement.evaluate((el) =>
-      el.scrollIntoView({ behavior: "auto", block: "center", inline: "center" })
+      el.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "center",
+      })
     );
 
+    await sleep(randomInt(300) + 50); // Small, quick pause before click
+
     try {
-      // clicking the day usually triggers a network request to fetch times — throttle
       await enforceGlobalRateLimit();
-      await withRetries(
-        () => page.evaluate((el) => el.click(), dayElement),
-        2,
-        500
-      );
+      await withRetries(() => dayElement.click(), 2, 300); // Faster click retry
     } catch (e) {
-      console.warn(`click failed for ${dateStr} on ${room.name}`);
+      console.warn(`Click failed for ${dateStr} on ${room.name}`);
+      continue;
     }
 
+    // --- Wait for Time Slot Update ---
+    const timeSelectionSelector = ".time-selection";
     const prevHTML = await page
-      .$eval(".time-selection", (el) => el.innerHTML)
+      .$eval(timeSelectionSelector, (el) => el.innerHTML)
       .catch(() => "");
 
     try {
       await page.waitForFunction(
-        (prev) => {
-          const el = document.querySelector(".time-selection");
+        (selector, prev) => {
+          const el = document.querySelector(selector);
           return el && el.innerHTML !== prev;
         },
         { timeout: TIME_LIST_WAIT_MS },
+        timeSelectionSelector,
         prevHTML
       );
-    } catch {
-      // timeout - maybe no change, proceed to read
+    } catch (e) {
+      // Timeout - proceed to read current content
     }
 
-    const availableSlots = await page.evaluate(() => {
-      const listItems = [...document.querySelectorAll(".time-selection li")];
+    // --- Scrape Available Slots ---
+    const availableSlots = await page.evaluate((sel) => {
+      const listItems = [...document.querySelectorAll(sel)];
       return listItems
         .filter(
           (li) =>
             !li.classList.contains("disabled") &&
             !li.classList.contains("list-group-item-danger") &&
-            !li.textContent.trim().toLowerCase().includes("not available")
+            !li.textContent.trim().toLowerCase().includes("not available") &&
+            li.textContent.trim().length > 0
         )
         .map((li) => li.textContent.trim().slice(0, 5));
-    });
+    }, `${timeSelectionSelector} li`);
 
     if (availableSlots.length > 0) {
       roomAvailability[dateStr] = availableSlots;
       console.log(
         `✅ ${room.name} - ${dateStr}: Slots → ${availableSlots.join(", ")}`
       );
-    } else {
-      console.log(`⛔ ${room.name} - ${dateStr}: No slots available`);
     }
 
-    // small polite pause between days so UI has time to settle
+    // Polite pause between days (adjusted for faster pace)
     const dayElapsed = Date.now() - dayStart;
     await sleep(
-      Math.max(0, DAY_CHECK_BASE_MS + randomInt(DAY_CHECK_JITTER_MS))
+      Math.max(
+        100,
+        DAY_CHECK_BASE_MS + randomInt(DAY_CHECK_JITTER_MS) - dayElapsed
+      )
     );
-    console.log(`⏱️ ${room.name} - checked ${dateStr} in ${dayElapsed}ms`);
   }
 
-  return roomAvailability; // return all found availability for this room
+  return roomAvailability;
 }
 
-// === Main ===
-(async () => {
-  console.log("🚀 Starting availability check...");
+// === Room Processing Function (Isolated Browser) ===
+const processRoom = async (room, limit) => {
+  let browser;
+  let page;
+  let availability = {};
 
-  const rooms = JSON.parse(fs.readFileSync(ROOMS_FILE, "utf8"));
+  try {
+    // Initial random stagger
+    const stagger = STAGGER_START_MS + randomInt(RANDOM_EXTRA_DELAY_MS);
+    await sleep(stagger);
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-  const limit = pLimit(MAX_CONCURRENT_REQUESTS);
+    page = await browser.newPage();
 
-  const results = await Promise.all(
-    rooms.map((room, idx) =>
-      limit(async () => {
-        // Stagger starts so we don't hammer the site when launched for many rooms
-        const stagger = idx * STAGGER_MS + randomInt(RANDOM_EXTRA_DELAY_MS);
-        await sleep(stagger);
-
-        const page = await browser.newPage();
-        await page.setUserAgent(generateUserAgent());
-        try {
-          const availability = await withRetries(
-            () => checkRoomAvailability(page, room),
-            2,
-            1000
-          );
-
-          // Polite pause after finishing a room to reduce request rate
-          await sleep(
-            MIN_DELAY_BETWEEN_ROOMS_MS + randomInt(RANDOM_EXTRA_DELAY_MS)
-          );
-
-          return { roomName: room.name, availability };
-        } catch (err) {
-          console.error(`❌ Error checking room ${room.name}:`, err.message);
-          return { roomName: room.name, availability: null };
-        } finally {
-          await page.close();
-        }
-      })
-    )
-  );
-
-  await browser.close();
-
-  // Compose and send grouped messages per room
-  for (const { roomName, availability } of results) {
-    if (!availability || Object.keys(availability).length === 0) {
-      console.log(
-        `🛑 No availability found for room: ${roomName}, skipping message.`
-      );
-      continue;
-    }
-
-    let message = `🏠 <b>${roomName}</b>\n\nAvailable slots:\n`;
-    for (const [dateStr, slots] of Object.entries(availability)) {
-      message += `\n<b>${dateStr}</b>: ${slots.join(", ")}`;
-    }
-
-    await sendToTelegram(message);
+    availability = await withRetries(
+      () => checkRoomAvailability(page, room),
+      2,
+      1000
+    );
+  } catch (err) {
+    console.error(`❌ Fatal Error checking room ${room.name}:`, err.message);
+    availability = null;
+  } finally {
+    // Close the browser dedicated to this room
+    if (browser) await browser.close().catch(() => {});
   }
 
-  console.log("✅ Availability check complete.");
+  // Polite pause after finishing a room
+  await sleep(MIN_DELAY_BETWEEN_CHECKS_MS + randomInt(RANDOM_EXTRA_DELAY_MS));
+
+  return { roomName: room.name, availability };
+};
+
+// --- Main Execution ---
+(async () => {
+  console.log("🚀 Starting concurrent availability check...");
+
+  try {
+    const roomsData = await fs.readFile(ROOMS_FILE, "utf8");
+    const rooms = JSON.parse(roomsData);
+
+    // Concurrency is now MAX_CONCURRENT_ROOMS (default 2)
+    const limit = pLimit(MAX_CONCURRENT_ROOMS);
+
+    const results = await Promise.all(
+      rooms.map((room) => limit(() => processRoom(room, limit)))
+    );
+
+    // 3. Reporting
+    for (const { roomName, availability } of results) {
+      if (!availability || Object.keys(availability).length === 0) {
+        console.log(
+          `🛑 No availability found for room: ${roomName}, skipping message.`
+        );
+        continue;
+      }
+
+      let message = `🏠 <b>${roomName}</b>\n\nAvailable slots:\n`;
+      for (const [dateStr, slots] of Object.entries(availability)) {
+        message += `\n<b>${dateStr}</b>: ${slots.join(", ")}`;
+      }
+
+      await sendToTelegram(message);
+    }
+
+    console.log("✅ Concurrent availability check complete.");
+  } catch (error) {
+    console.error(
+      "A critical error occurred in the main script:",
+      error.message
+    );
+  }
 })();
