@@ -1,5 +1,5 @@
 [
-   {
+  {
     "name": "Scream",
     "url": "https://www.escapeall.gr/en/EscapeRoom/Details/scream"
   },
@@ -35,8 +35,57 @@
     "name": "Lunacy",
     "url": "https://www.escapeall.gr/en/EscapeRoom/Details/lunacy"
   },
+
   {
-    "name": "Santa Gunada",
-    "url": "https://www.escapeall.gr/el/EscapeRoom/Details/santa-gunada"
+    "name": "The Blair Witch Project",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/the-blair-witch-project"
+  },
+  {
+    "name": "Born in Darkness",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/born-in-darkness"
+  },
+  {
+    "name": "Dungeon Nightmare",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/dungeon-nightmare"
+  },
+  {
+    "name": "The Last of Us Mystic",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/the-last-of-us-mystic"
+  },
+  {
+    "name": "Buried Alive",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/buried-alive"
+  },
+  {
+    "name": "Five Nights at Benny's",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/five-nights-at-bennys"
+  },
+  {
+    "name": "Whistleblower",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/whistleblower"
+  },
+  {
+    "name": "El Testamento",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/el-testamento"
+  },
+  {
+    "name": "Noah",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/noah"
+  },
+  {
+    "name": "Tarot",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/tarot"
+  },
+  {
+    "name": "Dream On",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/dream-on"
+  },
+  {
+    "name": "Maestro",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/maestro"
+  },
+  {
+    "name": "I See Dead People - Do You Have The 6th Sense",
+    "url": "https://www.escapeall.gr/en/EscapeRoom/Details/i-see-dead-people-do-you-have-the-6th-sense"
   }
 ]
