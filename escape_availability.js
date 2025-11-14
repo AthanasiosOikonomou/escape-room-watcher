@@ -14,29 +14,29 @@ const MAX_CONCURRENT_REQUESTS = process.env.MAX_CONCURRENT_REQUESTS
   : 1; // how many pages in parallel (conservative)
 const STAGGER_MS = process.env.STAGGER_MS
   ? Number(process.env.STAGGER_MS)
-  : 10000; // stagger start between rooms (default 10s)
+  : 3500; // stagger start between rooms (~3.5s, human-like)
 const MIN_DELAY_BETWEEN_ROOMS_MS = process.env.MIN_DELAY_BETWEEN_ROOMS_MS
   ? Number(process.env.MIN_DELAY_BETWEEN_ROOMS_MS)
-  : 30000; // wait at least this between room checks (default 30s)
+  : 4500; // wait at least this between room checks (~4.5s)
 const RANDOM_EXTRA_DELAY_MS = process.env.RANDOM_EXTRA_DELAY_MS
   ? Number(process.env.RANDOM_EXTRA_DELAY_MS)
-  : 10000; // additional random delay (default up to 10s)
+  : 1500; // additional random delay (up to ~1.5s)
 // Per-day timing (tweak to speed up or be more polite)
 const DAY_CHECK_BASE_MS = process.env.DAY_CHECK_BASE_MS
   ? Number(process.env.DAY_CHECK_BASE_MS)
-  : 200; // base pause between checking days
+  : 2000; // base pause between checking days (~2s)
 const DAY_CHECK_JITTER_MS = process.env.DAY_CHECK_JITTER_MS
   ? Number(process.env.DAY_CHECK_JITTER_MS)
-  : 400; // jitter added to base per-day pause
+  : 1500; // jitter added to base per-day pause (~0-1.5s)
 const TIME_LIST_WAIT_MS = process.env.TIME_LIST_WAIT_MS
   ? Number(process.env.TIME_LIST_WAIT_MS)
-  : 1200; // how long to wait for time list to change after clicking (ms)
+  : 1500; // how long to wait for time list to change after clicking (ms)
 // Global rate limit to avoid temporary bans. This enforces a minimum interval
 // between any two requests that likely hit the server (navigation or day click).
 const GLOBAL_MIN_REQUEST_INTERVAL_MS = process.env
   .GLOBAL_MIN_REQUEST_INTERVAL_MS
   ? Number(process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS)
-  : 7000; // default 7s between server-impacting requests
+  : 2000; // default ~2s between server-impacting requests (human-like)
 
 let _lastRequestAt = 0;
 async function enforceGlobalRateLimit() {
