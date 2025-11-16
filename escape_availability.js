@@ -10,17 +10,17 @@ const ROOMS_FILE = "./roomsToWatch.json";
 
 // Politeness and Speed Configuration (Optimized)
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
-const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 2); // Increased concurrency
+const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Increased concurrency
 const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500); // Shorter initial stagger
 const MIN_DELAY_BETWEEN_CHECKS_MS = Number(
   process.env.MIN_DELAY_BETWEEN_ROOMS_MS ?? 2500
 ); // Shorter minimum delay between rooms
-const RANDOM_EXTRA_DELAY_MS = Number(process.env.RANDOM_EXTRA_DELAY_MS ?? 1000); // Jitter (up to 1s)
-const DAY_CHECK_BASE_MS = Number(process.env.DAY_CHECK_BASE_MS ?? 800); // Shorter base pause between checking days
-const DAY_CHECK_JITTER_MS = Number(process.env.DAY_CHECK_JITTER_MS ?? 500); // Jitter added to base per-day pause
-const TIME_LIST_WAIT_MS = Number(process.env.TIME_LIST_WAIT_MS ?? 2000); // Max wait for time list to change
+const RANDOM_EXTRA_DELAY_MS = Number(process.env.RANDOM_EXTRA_DELAY_MS ?? 1500); // Jitter (up to 1s)
+const DAY_CHECK_BASE_MS = Number(process.env.DAY_CHECK_BASE_MS ?? 1000); // Shorter base pause between checking days
+const DAY_CHECK_JITTER_MS = Number(process.env.DAY_CHECK_JITTER_MS ?? 900); // Jitter added to base per-day pause
+const TIME_LIST_WAIT_MS = Number(process.env.TIME_LIST_WAIT_MS ?? 2500); // Max wait for time list to change
 const GLOBAL_MIN_REQUEST_INTERVAL_MS = Number(
-  process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS ?? 1000
+  process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS ?? 1500
 ); // Shorter min interval between server-impacting requests
 
 // CRITICAL: Fast fail if the calendar doesn't load quickly
@@ -323,7 +323,7 @@ const processRoom = async (room, limit) => {
         message += `\n<b>${dateStr}</b>: ${slots.join(", ")}`;
       }
 
-      await sendToTelegram(message);
+      // await sendToTelegram(message);
     }
 
     console.log("✅ Concurrent availability check complete.");
