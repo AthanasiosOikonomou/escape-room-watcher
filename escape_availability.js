@@ -10,7 +10,7 @@ const ROOMS_FILE = "./roomsToWatch.json";
 
 // Politeness and Speed Configuration (Optimized)
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
-const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Keeping concurrency low for debugging stability
+const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Set concurrency to a slightly safe level (e.g., 2)
 const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500);
 const MIN_DELAY_BETWEEN_CHECKS_MS = Number(
   process.env.MIN_DELAY_BETWEEN_ROOMS_MS ?? 2500
@@ -23,6 +23,7 @@ const GLOBAL_MIN_REQUEST_INTERVAL_MS = Number(
   process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS ?? 1500
 );
 
+// CRITICAL: Fast fail if the calendar doesn't load quickly
 const CALENDAR_WAIT_TIMEOUT_MS = 2500;
 
 // --- Global Rate Limiter (State and Function) ---
@@ -33,12 +34,13 @@ async function enforceGlobalRateLimit() {
   const nextAllowed = _lastRequestAt + GLOBAL_MIN_REQUEST_INTERVAL_MS;
   if (now < nextAllowed) {
     const wait = nextAllowed - now;
+    // console.log(`(rate-limit) waiting ${wait}ms to respect global interval`);
     await sleep(wait);
   }
   _lastRequestAt = Date.now();
 }
 
-// --- Telegram & Utility Functions (Unchanged) ---
+// --- Telegram & Utility Functions ---
 const TELEGRAM_API = TELEGRAM_TOKEN
   ? `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`
   : null;
@@ -96,7 +98,7 @@ async function withRetries(fn, attempts = 3, baseDelay = 1000) {
   }
 }
 
-// === Date format helpers (Unchanged) ===
+// === Date format helpers ===
 const today = new Date();
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -109,7 +111,7 @@ const formatYear = (d) => d.getFullYear().toString();
 
 // === Puppeteer: Check availability for one room ===
 async function checkRoomAvailability(page, room) {
-  // console.log(`\n🔍 Checking room: ${room.name} (${room.url})`);
+  console.log(`\n🔍 Checking room: ${room.name} (${room.url})`);
 
   await page.setUserAgent(generateUserAgent());
 
@@ -141,7 +143,7 @@ async function checkRoomAvailability(page, room) {
   const roomAvailability = {};
   const timeSelectionSelector = ".time-selection";
 
-  // Set a variable to hold the HTML content of the time slot container
+  // Set initial HTML content of the time slot container
   let lastKnownTimeHTML = await page
     .$eval(timeSelectionSelector, (el) => el.innerHTML)
     .catch(() => "");
@@ -197,51 +199,71 @@ async function checkRoomAvailability(page, room) {
       continue;
     }
 
-    // --- Wait for Time Slot Update (Improved) ---
+    // --- Wait for Time Slot Update (Mitigating Stale Data) ---
+    const expectedChange = lastKnownTimeHTML;
+    let timeListUpdated = false;
+
     try {
-      // Wait until the inner HTML of the time list is different from the last known state.
       await page.waitForFunction(
         (selector, prevHTML) => {
           const el = document.querySelector(selector);
-          // Only return true if element exists AND the HTML has changed
           return el && el.innerHTML !== prevHTML;
         },
         { timeout: TIME_LIST_WAIT_MS },
         timeSelectionSelector,
-        lastKnownTimeHTML
+        expectedChange
       );
+      timeListUpdated = true;
     } catch (e) {
-      // Timeout - the content may have not changed, or loaded too slowly.
+      console.log(`[STALE DATA] Time slot list for ${dateStr} did not change.`);
     }
 
-    // After waiting, we must update the last known HTML *before* scraping slots.
-    // This new HTML will be the baseline for the next day's check.
+    // CRITICAL: Update the last known HTML for the next loop iteration.
     lastKnownTimeHTML = await page
       .$eval(timeSelectionSelector, (el) => el.innerHTML)
       .catch(() => "");
 
     // --- Scrape Available Slots ---
-    const availableSlots = await page.evaluate((sel) => {
-      const listItems = [...document.querySelectorAll(sel)];
-      return (
-        listItems
+    const availableSlots = await page.evaluate(
+      (sel, isStale) => {
+        const listItems = [...document.querySelectorAll(sel)];
+
+        // Check for explicit "No Slots" messages in the list
+        const noSlotsMessage = listItems.some(
+          (li) =>
+            li.textContent.trim().toLowerCase().includes("no availability") ||
+            li.textContent.trim().toLowerCase().includes("fully booked")
+        );
+
+        if (isStale && !noSlotsMessage && listItems.length > 0) {
+          // If the update timed out (isStale=true) AND we didn't see a clear "fully booked"
+          // message, we defensively assume the slots are from a previous date and drop them.
+          return [];
+        }
+
+        return listItems
           .filter(
             (li) =>
-              // IMPORTANT: Filter by class/text that indicates availability
               !li.classList.contains("disabled") &&
               !li.classList.contains("list-group-item-danger") &&
               !li.textContent.trim().toLowerCase().includes("not available") &&
               li.textContent.trim().length > 0
           )
-          // Extract the time and ensure only the first 5 characters are taken (e.g., "19:10")
-          .map((li) => li.textContent.trim().slice(0, 5))
-      );
-    }, `${timeSelectionSelector} li`);
+          .map((li) => li.textContent.trim().slice(0, 5));
+      },
+      `${timeSelectionSelector} li`,
+      !timeListUpdated
+    ); // Pass update status
 
     if (availableSlots.length > 0) {
       roomAvailability[dateStr] = availableSlots;
       console.log(
         `✅ ${room.name} - ${dateStr}: Slots → ${availableSlots.join(", ")}`
+      );
+    } else if (timeListUpdated) {
+      // Log a message ONLY if the list updated but was empty.
+      console.log(
+        `[Empty] ${room.name} - ${dateStr}: List updated but no slots found.`
       );
     }
 
@@ -257,7 +279,7 @@ async function checkRoomAvailability(page, room) {
   return roomAvailability;
 }
 
-// === Room Processing Function (Isolated Browser - Unchanged) ===
+// === Room Processing Function (Isolated Browser) ===
 const processRoom = async (room, limit) => {
   let browser;
   let page;
@@ -291,7 +313,7 @@ const processRoom = async (room, limit) => {
   return { roomName: room.name, availability };
 };
 
-// --- Main Execution (Unchanged) ---
+// --- Main Execution ---
 (async () => {
   console.log("🚀 Starting concurrent availability check...");
 
@@ -319,7 +341,8 @@ const processRoom = async (room, limit) => {
         message += `\n<b>${dateStr}</b>: ${slots.join(", ")}`;
       }
 
-      // await sendToTelegram(message);
+      // Re-enable Telegram integration when ready
+      await sendToTelegram(message);
     }
 
     console.log("✅ Concurrent availability check complete.");
