@@ -10,20 +10,19 @@ const ROOMS_FILE = "./roomsToWatch.json";
 
 // Politeness and Speed Configuration (Optimized)
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
-const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Increased concurrency
-const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500); // Shorter initial stagger
+const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Keeping concurrency low for debugging stability
+const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500);
 const MIN_DELAY_BETWEEN_CHECKS_MS = Number(
   process.env.MIN_DELAY_BETWEEN_ROOMS_MS ?? 2500
-); // Shorter minimum delay between rooms
-const RANDOM_EXTRA_DELAY_MS = Number(process.env.RANDOM_EXTRA_DELAY_MS ?? 1500); // Jitter (up to 1s)
-const DAY_CHECK_BASE_MS = Number(process.env.DAY_CHECK_BASE_MS ?? 1000); // Shorter base pause between checking days
-const DAY_CHECK_JITTER_MS = Number(process.env.DAY_CHECK_JITTER_MS ?? 900); // Jitter added to base per-day pause
-const TIME_LIST_WAIT_MS = Number(process.env.TIME_LIST_WAIT_MS ?? 2500); // Max wait for time list to change
+);
+const RANDOM_EXTRA_DELAY_MS = Number(process.env.RANDOM_EXTRA_DELAY_MS ?? 1500);
+const DAY_CHECK_BASE_MS = Number(process.env.DAY_CHECK_BASE_MS ?? 1000);
+const DAY_CHECK_JITTER_MS = Number(process.env.DAY_CHECK_JITTER_MS ?? 900);
+const TIME_LIST_WAIT_MS = Number(process.env.TIME_LIST_WAIT_MS ?? 2500);
 const GLOBAL_MIN_REQUEST_INTERVAL_MS = Number(
   process.env.GLOBAL_MIN_REQUEST_INTERVAL_MS ?? 1500
-); // Shorter min interval between server-impacting requests
+);
 
-// CRITICAL: Fast fail if the calendar doesn't load quickly
 const CALENDAR_WAIT_TIMEOUT_MS = 2500;
 
 // --- Global Rate Limiter (State and Function) ---
@@ -34,7 +33,6 @@ async function enforceGlobalRateLimit() {
   const nextAllowed = _lastRequestAt + GLOBAL_MIN_REQUEST_INTERVAL_MS;
   if (now < nextAllowed) {
     const wait = nextAllowed - now;
-    // console.log(`(rate-limit) waiting ${wait}ms to respect global interval`);
     await sleep(wait);
   }
   _lastRequestAt = Date.now();
@@ -127,29 +125,26 @@ async function checkRoomAvailability(page, room) {
     2000
   );
 
-  // Human-like pause after loading
   await sleep(randomInt(500) + 200);
 
   const dateCellSelector =
     ".dateCell, .date-cell, [data-day], .time-selection, .calendar";
 
-  // console.log(
-  //   `[DEBUG] Room: ${room.name} | Waiting for selector: ${dateCellSelector}`
-  // );
-
   try {
-    // CRITICAL: Reduced timeout for fast-fail on calendar check
     await page.waitForSelector(dateCellSelector, {
       timeout: CALENDAR_WAIT_TIMEOUT_MS,
     });
   } catch (e) {
-    // console.warn(
-    //   `❌ Calendar element not rendered within ${CALENDAR_WAIT_TIMEOUT_MS}ms for ${room.name}. Skipping check.`
-    // );
     return {};
   }
 
   const roomAvailability = {};
+  const timeSelectionSelector = ".time-selection";
+
+  // Set a variable to hold the HTML content of the time slot container
+  let lastKnownTimeHTML = await page
+    .$eval(timeSelectionSelector, (el) => el.innerHTML)
+    .catch(() => "");
 
   for (let offset = 0; offset <= DAYS_AHEAD; offset++) {
     const date = new Date(today);
@@ -184,7 +179,6 @@ async function checkRoomAvailability(page, room) {
       continue;
     }
 
-    // Scroll and pause before clicking (more human-like)
     await dayElement.evaluate((el) =>
       el.scrollIntoView({
         behavior: "smooth",
@@ -193,48 +187,55 @@ async function checkRoomAvailability(page, room) {
       })
     );
 
-    await sleep(randomInt(300) + 50); // Small, quick pause before click
+    await sleep(randomInt(300) + 50);
 
     try {
       await enforceGlobalRateLimit();
-      await withRetries(() => dayElement.click(), 2, 300); // Faster click retry
+      await withRetries(() => dayElement.click(), 2, 300);
     } catch (e) {
       console.warn(`Click failed for ${dateStr} on ${room.name}`);
       continue;
     }
 
-    // --- Wait for Time Slot Update ---
-    const timeSelectionSelector = ".time-selection";
-    const prevHTML = await page
-      .$eval(timeSelectionSelector, (el) => el.innerHTML)
-      .catch(() => "");
-
+    // --- Wait for Time Slot Update (Improved) ---
     try {
+      // Wait until the inner HTML of the time list is different from the last known state.
       await page.waitForFunction(
-        (selector, prev) => {
+        (selector, prevHTML) => {
           const el = document.querySelector(selector);
-          return el && el.innerHTML !== prev;
+          // Only return true if element exists AND the HTML has changed
+          return el && el.innerHTML !== prevHTML;
         },
         { timeout: TIME_LIST_WAIT_MS },
         timeSelectionSelector,
-        prevHTML
+        lastKnownTimeHTML
       );
     } catch (e) {
-      // Timeout - proceed to read current content
+      // Timeout - the content may have not changed, or loaded too slowly.
     }
+
+    // After waiting, we must update the last known HTML *before* scraping slots.
+    // This new HTML will be the baseline for the next day's check.
+    lastKnownTimeHTML = await page
+      .$eval(timeSelectionSelector, (el) => el.innerHTML)
+      .catch(() => "");
 
     // --- Scrape Available Slots ---
     const availableSlots = await page.evaluate((sel) => {
       const listItems = [...document.querySelectorAll(sel)];
-      return listItems
-        .filter(
-          (li) =>
-            !li.classList.contains("disabled") &&
-            !li.classList.contains("list-group-item-danger") &&
-            !li.textContent.trim().toLowerCase().includes("not available") &&
-            li.textContent.trim().length > 0
-        )
-        .map((li) => li.textContent.trim().slice(0, 5));
+      return (
+        listItems
+          .filter(
+            (li) =>
+              // IMPORTANT: Filter by class/text that indicates availability
+              !li.classList.contains("disabled") &&
+              !li.classList.contains("list-group-item-danger") &&
+              !li.textContent.trim().toLowerCase().includes("not available") &&
+              li.textContent.trim().length > 0
+          )
+          // Extract the time and ensure only the first 5 characters are taken (e.g., "19:10")
+          .map((li) => li.textContent.trim().slice(0, 5))
+      );
     }, `${timeSelectionSelector} li`);
 
     if (availableSlots.length > 0) {
@@ -244,7 +245,6 @@ async function checkRoomAvailability(page, room) {
       );
     }
 
-    // Polite pause between days (adjusted for faster pace)
     const dayElapsed = Date.now() - dayStart;
     await sleep(
       Math.max(
@@ -257,14 +257,13 @@ async function checkRoomAvailability(page, room) {
   return roomAvailability;
 }
 
-// === Room Processing Function (Isolated Browser) ===
+// === Room Processing Function (Isolated Browser - Unchanged) ===
 const processRoom = async (room, limit) => {
   let browser;
   let page;
   let availability = {};
 
   try {
-    // Initial random stagger
     const stagger = STAGGER_START_MS + randomInt(RANDOM_EXTRA_DELAY_MS);
     await sleep(stagger);
 
@@ -284,17 +283,15 @@ const processRoom = async (room, limit) => {
     console.error(`❌ Fatal Error checking room ${room.name}:`, err.message);
     availability = null;
   } finally {
-    // Close the browser dedicated to this room
     if (browser) await browser.close().catch(() => {});
   }
 
-  // Polite pause after finishing a room
   await sleep(MIN_DELAY_BETWEEN_CHECKS_MS + randomInt(RANDOM_EXTRA_DELAY_MS));
 
   return { roomName: room.name, availability };
 };
 
-// --- Main Execution ---
+// --- Main Execution (Unchanged) ---
 (async () => {
   console.log("🚀 Starting concurrent availability check...");
 
@@ -302,7 +299,6 @@ const processRoom = async (room, limit) => {
     const roomsData = await fs.readFile(ROOMS_FILE, "utf8");
     const rooms = JSON.parse(roomsData);
 
-    // Concurrency is now MAX_CONCURRENT_ROOMS (default 2)
     const limit = pLimit(MAX_CONCURRENT_ROOMS);
 
     const results = await Promise.all(
