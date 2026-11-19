@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 
 import { ConfigError, loadConfig } from "../src/config.js";
 import { roomSlug, validateWatchlist } from "../src/watchlist.js";
-import { dayLabel, escapeHtml, formatRoomMessage } from "../src/notify/telegram.js";
+import { dayLabel, escapeHtml, formatRoomMessage, plainText } from "../src/notify/telegram.js";
 import { addDays, athensDate, isoFromDayMonthYear } from "../src/dates.js";
 
 test("config defaults", () => {
@@ -74,27 +74,37 @@ test("the watchlist accepts only EscapeAll room pages over https, each room once
 
 test("messages escape HTML and label days with their weekday", () => {
   assert.equal(escapeHtml(`<b>&"`), `&lt;b&gt;&amp;&quot;`);
-  assert.equal(dayLabel("2026-11-19"), "Thu 19/11/2026");
-  assert.equal(dayLabel("2027-01-03"), "Sun 03/01/2027");
+  assert.equal(dayLabel("2026-11-19"), "Thu 19 Nov");
+  assert.equal(dayLabel("2027-01-03"), "Sun 3 Jan");
   assert.equal(isoFromDayMonthYear("19/11/2026"), "2026-11-19");
   assert.equal(isoFromDayMonthYear("2026-11-19"), null);
   assert.equal(athensDate(new Date("2026-11-19T22:30:00Z")), "2026-11-20");
   assert.equal(addDays("2026-12-25", 14), "2027-01-08");
+});
+
+test("a room's message: the name, then one card per day with its start times", () => {
   assert.equal(
     formatRoomMessage({ name: "Tom & Jerry" }, [
       { date: "2026-11-19", slots: [{ time: "19:00" }, { time: "21:15" }] },
       { date: "2026-11-21", slots: [{ time: "00:30" }] },
     ]),
-    "🏠 <b>Tom &amp; Jerry</b>\n\nAvailable slots:\n\n<b>Thu 19/11/2026</b>: 19:00, 21:15\n<b>Sat 21/11/2026</b>: 00:30",
+    "🏠 <b>Tom &amp; Jerry</b>\n\n" +
+      "<blockquote><b>Thu 19 Nov</b>\n19:00  ·  21:15</blockquote>\n" +
+      "<blockquote><b>Sat 21 Nov</b>\n00:30</blockquote>",
   );
   // With a URL the name is a link to the room; with rules they are shown under it.
-  assert.equal(
-    formatRoomMessage(
-      { name: "Antique", url: "https://www.escapeall.gr/en/EscapeRoom/Details/antique", rules: [{ days: ["sat", "fri"], from: "19:00", to: "22:00" }, { days: ["sun"] }] },
-      [{ date: "2026-11-20", slots: [{ time: "20:45" }] }],
-    ),
-    '🏠 <a href="https://www.escapeall.gr/en/EscapeRoom/Details/antique"><b>Antique</b></a>\n<i>Fri, Sat 19:00–22:00; Sun</i>\n\nAvailable slots:\n\n<b>Fri 20/11/2026</b>: 20:45',
+  const message = formatRoomMessage(
+    { name: "Antique", url: "https://www.escapeall.gr/en/EscapeRoom/Details/antique", rules: [{ days: ["sat", "fri"], from: "19:00", to: "22:00" }, { days: ["sun"] }] },
+    [{ date: "2026-11-20", slots: [{ time: "20:45" }] }],
   );
+  assert.equal(
+    message,
+    '🏠 <a href="https://www.escapeall.gr/en/EscapeRoom/Details/antique"><b>Antique</b></a>\n<i>Fri, Sat 19:00–22:00; Sun</i>\n\n' +
+      "<blockquote><b>Fri 20 Nov</b>\n20:45</blockquote>",
+  );
+  // The same content survives without any markup.
+  assert.equal(plainText(message), "🏠 Antique\nFri, Sat 19:00–22:00; Sun\n\nFri 20 Nov\n20:45");
+  assert.equal(plainText("🏠 <b>Tom &amp; Jerry &lt;3</b>"), "🏠 Tom & Jerry <3");
 });
 
 test("an overlong message is cut at a day boundary", () => {
@@ -103,6 +113,7 @@ test("an overlong message is cut at a day boundary", () => {
     slots: [{ time: "19:00" }, { time: "21:15" }],
   }));
   const text = formatRoomMessage({ name: "Long" }, days);
-  assert.ok(text.length <= 4002);
-  assert.ok(text.endsWith("\n…"));
+  assert.ok(text.length <= 4000);
+  assert.ok(text.endsWith("</blockquote>\n…"));
+  assert.ok(text.split("<blockquote>").length - 1 < 400);
 });

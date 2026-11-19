@@ -4,7 +4,12 @@
  */
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MAX_MESSAGE_LENGTH = 4000; // Telegram's limit is 4096
+// In a group Telegram prints the bot's name directly above the text. This
+// blank-looking character on a line of its own puts some air under it
+// (Telegram strips ordinary leading blank lines).
+const TOP_GAP = "\u2800\n";
 
 import { describeRule } from "../rules.js";
 
@@ -23,29 +28,41 @@ function rulesLine(room) {
   return [`<i>${escapeHtml(room.rules.map(describeRule).join("; "))}</i>`];
 }
 
-/** "2026-11-19" -> "Thu 19/11/2026" */
+/** "2026-11-19" -> "Thu 19 Nov" */
 export function dayLabel(isoDate) {
-  const [year, month, day] = isoDate.split("-");
+  const [, month, day] = isoDate.split("-").map(Number);
   const weekday = WEEKDAYS[new Date(`${isoDate}T00:00:00Z`).getUTCDay()];
-  return `${weekday} ${day}/${month}/${year}`;
+  return `${weekday} ${day} ${MONTHS[month - 1]}`;
 }
 
 /**
  * Every free slot of the room that fits its rules, not only what changed.
+ * Each day is its own quote block, which Telegram draws as a small card:
+ * the day in bold, the start times under it.
  * @param {{ name: string, url?: string, rules?: object[] }} room
  * @param {{ date: string, slots: { time: string }[] }[]} days
  */
 export function formatRoomMessage(room, days) {
-  const lines = [`🏠 ${roomHeading(room)}`, ...rulesLine(room), "", "Available slots:", ""];
-  for (const day of days) {
-    lines.push(`<b>${dayLabel(day.date)}</b>: ${day.slots.map((slot) => slot.time).join(", ")}`);
-  }
-  let text = lines.join("\n");
-  while (text.length > MAX_MESSAGE_LENGTH && lines.length > 6) {
-    lines.pop();
-    text = `${lines.join("\n")}\n…`;
-  }
-  return text;
+  const head = [`🏠 ${roomHeading(room)}`, ...rulesLine(room)].join("\n");
+  const cards = days.map(
+    (day) => `<blockquote><b>${dayLabel(day.date)}</b>\n${day.slots.map((slot) => escapeHtml(slot.time)).join("  ·  ")}</blockquote>`,
+  );
+  let shown = cards.length;
+  const build = () => `${head}\n\n${cards.slice(0, shown).join("\n")}${shown < cards.length ? "\n…" : ""}`;
+  while (build().length > MAX_MESSAGE_LENGTH && shown > 1) shown -= 1;
+  return build();
+}
+
+/** The same message without any markup, for the rare case Telegram rejects the formatted one. */
+export function plainText(html) {
+  return html
+    .replace(/<\/blockquote>\n?/g, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .trim();
 }
 
 /** Sent when a room that had matching free slots has none left. */
@@ -75,18 +92,21 @@ export function createTelegram({ token, chatId, apiBase = "https://api.telegram.
   return {
     enabled: true,
     async send(text) {
-      try {
-        const response = await fetch(`${apiBase}/bot${token}/sendMessage`, {
+      const post = (body) =>
+        fetch(`${apiBase}/bot${token}/sendMessage`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text,
-            parse_mode: "HTML",
-            disable_web_page_preview: true,
-          }),
+          body: JSON.stringify({ chat_id: chatId, disable_web_page_preview: true, ...body }),
           signal: AbortSignal.timeout(15_000),
         });
+      try {
+        let response = await post({ text: `${TOP_GAP}${text}`, parse_mode: "HTML" });
+        if (response.status === 400) {
+          // Telegram could not read the formatting: the content matters more than the looks.
+          const said = await response.json().catch(() => null);
+          log(`(telegram) formatted message rejected (${said?.description ?? "HTTP 400"}), sending it as plain text`);
+          response = await post({ text: plainText(text) });
+        }
         if (response.ok) return true;
         const body = await response.json().catch(() => null);
         log(`(telegram) send failed: HTTP ${response.status}${body?.description ? `, ${body.description}` : ""}`);

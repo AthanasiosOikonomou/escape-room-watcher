@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 import { loadConfig } from "../src/config.js";
 import { addDays } from "../src/dates.js";
-import { createTelegram } from "../src/notify/telegram.js";
+import { createTelegram, dayLabel } from "../src/notify/telegram.js";
 import { SiteRefusal } from "../src/site/refusal.js";
 import { startMockSite } from "./helpers/mock-site.js";
 
@@ -31,7 +31,6 @@ const TOKEN = ["123456", "test-token"].join(":");
 // The room check works in the machine's own calendar day.
 const now = new Date();
 const TODAY = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-const label = (iso) => iso.split("-").reverse().join("/");
 
 let site;
 let bot;
@@ -39,11 +38,17 @@ let bot;
 /** A stand-in for api.telegram.org that records what it is sent. */
 async function startMockTelegram() {
   const received = [];
+  const behaviour = { rejectFormatting: false };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
-      received.push({ path: req.url, body: JSON.parse(body) });
+      const message = JSON.parse(body);
+      received.push({ path: req.url, body: message });
+      if (behaviour.rejectFormatting && message.parse_mode === "HTML") {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: false, description: "Bad Request: can't parse entities" }));
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"ok":true}');
     });
@@ -52,6 +57,7 @@ async function startMockTelegram() {
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
     received,
+    behaviour,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -106,9 +112,10 @@ test("the original room check, run against the mock site: free slots, nothing fr
   const [{ path: sentTo, body }] = bot.received;
   assert.equal(sentTo, `/bot${TOKEN}/sendMessage`);
   assert.equal(body.chat_id, "42");
-  assert.match(body.text, /^🏠 <a href="http:\/\/127\.0\.0\.1:\d+\/en\/EscapeRoom\/Details\/antique"><b>Antique &lt;VIP&gt;<\/b><\/a>\n\nAvailable slots:\n\n<b>\w{3} /);
-  assert.ok(body.text.includes(`${label(TODAY)}</b>: 19:00, 21:15`));
-  assert.ok(body.text.trimEnd().endsWith(`${label(addDays(TODAY, 2))}</b>: 00:30`));
+  // A blank-looking first line keeps the text clear of the bot's name, then the room as a link.
+  assert.match(body.text, /^\u2800\n🏠 <a href="http:\/\/127\.0\.0\.1:\d+\/en\/EscapeRoom\/Details\/antique"><b>Antique &lt;VIP&gt;<\/b><\/a>\n\n<blockquote><b>\w{3} \d/);
+  assert.ok(body.text.includes(`${dayLabel(TODAY)}</b>\n19:00  ·  21:15</blockquote>`));
+  assert.ok(body.text.endsWith(`<blockquote><b>${dayLabel(addDays(TODAY, 2))}</b>\n00:30</blockquote>`));
 
   // The site sees what it always saw: one page load per room (the page fetches its own calendar).
   assert.deepEqual(pageCalls(), [
@@ -275,7 +282,7 @@ test("a room's rules decide which free slots are reported", async () => {
   assert.deepEqual(report.summary, { rooms: 2, withFreeSlots: 1, nothingFree: 1, removed: 0, errors: 0, blocked: 0, undelivered: 0 });
   assert.equal(bot.received.length, 1);
   assert.ok(bot.received[0].body.text.includes("<i>Fri, Sat, Sun 19:00–22:00</i>"));
-  assert.ok(bot.received[0].body.text.endsWith("<b>Fri 20/11/2026</b>: 20:45"));
+  assert.ok(bot.received[0].body.text.endsWith("<blockquote><b>Fri 20 Nov</b>\n20:45</blockquote>"));
   assert.ok(lines.some((line) => line.includes("1 matching free slot(s) on 1 day(s) (4 more outside your rules)")));
   assert.ok(lines.some((line) => line.includes("Late: nothing free that fits (5 more outside your rules)")));
 });
@@ -295,7 +302,11 @@ test("the full list is sent when it changes, not again while it stays the same",
   availability = { "20/11/2026": ["20:45", "23:00"], "21/11/2026": ["00:30"] };
   const { report } = await runOnce(); // one slot more: the whole list is sent, not only the new slot
   assert.equal(bot.received.length, 2);
-  assert.ok(bot.received[1].body.text.endsWith("<b>Fri 20/11/2026</b>: 20:45, 23:00\n<b>Sat 21/11/2026</b>: 00:30"));
+  assert.ok(
+    bot.received[1].body.text.endsWith(
+      "<blockquote><b>Fri 20 Nov</b>\n20:45  ·  23:00</blockquote>\n<blockquote><b>Sat 21 Nov</b>\n00:30</blockquote>",
+    ),
+  );
   assert.equal(report.results[0].notified, true);
 
   availability = {};
@@ -370,6 +381,24 @@ test("without Telegram settings nothing is sent and the run still succeeds", asy
   assert.equal(report.results[0].notified, false);
   assert.ok(lines.includes("(telegram) not configured, message not sent"));
   assert.equal(exitCodeFor(report), 0);
+});
+
+test("if Telegram rejects the formatting, the same content is sent as plain text", async () => {
+  bot.received.length = 0;
+  bot.behaviour.rejectFormatting = true;
+  try {
+    const checkRoom = async () => ({ availability: { "20/11/2026": ["20:45", "23:00"] }, removed: null });
+    const { report, lines } = await watch([{ ...room("Tom & Jerry", "tom"), rules: [{ days: ["fri"] }] }], { checkRoom, expectDelivery: true });
+
+    assert.equal(bot.received.length, 2); // the formatted try, then the plain one
+    assert.equal(bot.received[1].body.parse_mode, undefined);
+    assert.equal(bot.received[1].body.text, "🏠 Tom & Jerry\nFri\n\nFri 20 Nov\n20:45  ·  23:00");
+    assert.equal(report.results[0].notified, true);
+    assert.equal(report.summary.undelivered, 0);
+    assert.ok(lines.some((line) => line.includes("formatted message rejected (Bad Request: can't parse entities)")));
+  } finally {
+    bot.behaviour.rejectFormatting = false;
+  }
 });
 
 test("a Telegram failure is logged without the bot token", async () => {
