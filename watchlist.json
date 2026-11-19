@@ -26,12 +26,6 @@
       "rules": []
     },
     {
-      "name": "Lunacy",
-      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/lunacy",
-      "paused": false,
-      "rules": []
-    },
-    {
       "name": "The Blair Witch Project",
       "url": "https://www.escapeall.gr/en/EscapeRoom/Details/the-blair-witch-project",
       "paused": false,
@@ -71,7 +65,11 @@
       "name": "The Sculptor",
       "url": "https://www.escapeall.gr/el/EscapeRoom/Details/the-sculptor",
       "paused": false,
-      "rules": []
+      "rules": [
+        {
+          "from": "19:00"
+        }
+      ]
     },
     {
       "name": "Noah",
