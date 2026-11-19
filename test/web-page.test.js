@@ -32,7 +32,7 @@ before(async () => {
     if (message.type() === "error" && !message.text().includes("status of 409")) problems.push(`console: ${message.text()}`);
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  await page.waitForSelector(".room");
+  await waitForRooms();
 });
 
 after(async () => {
@@ -41,9 +41,32 @@ after(async () => {
   await github.close();
 });
 
+/** Waits for the list; if it never comes, says what the page shows instead. */
+const waitForRooms = async () => {
+  try {
+    await page.waitForSelector(".room", { timeout: 10_000 });
+  } catch {
+    const state = await page.evaluate(() => ({
+      count: document.getElementById("count")?.textContent,
+      notice: document.getElementById("notice")?.textContent,
+      url: location.href,
+    }));
+    throw new Error(`the list did not appear: ${JSON.stringify(state)}`);
+  }
+};
 const text = (selector) => page.$eval(selector, (node) => node.textContent.trim());
 const hidden = (selector) => page.$eval(selector, (node) => node.hidden);
-const names = () => page.$$eval(".room-name", (nodes) => nodes.map((node) => node.value));
+const names = () => page.$$eval(".room-name a", (nodes) => nodes.map((node) => node.textContent));
+const dialogOpen = () => page.$eval("#slots", (dialog) => dialog.open);
+/** What each room shows: one "<lit days> <hours>" line per slot. */
+const shownSlots = () =>
+  page.$$eval(".room", (rooms) =>
+    rooms.map((room) =>
+      [...room.querySelectorAll(".slot")].map(
+        (slot) => `${slot.querySelectorAll(".dot.on").length} days ${slot.querySelector(".slot-time").textContent}`,
+      ),
+    ),
+  );
 const clickText = (scope, label) =>
   page.evaluate(
     (scope, label) => {
@@ -54,6 +77,8 @@ const clickText = (scope, label) =>
     scope,
     label,
   );
+const tick = (day) => page.click(`#slots input[type=checkbox][aria-label="${day}"]`);
+const ticked = () => page.$$eval("#slots input[type=checkbox]:checked", (boxes) => boxes.map((box) => box.getAttribute("aria-label")));
 // The save bar slides in from below; wait until it has arrived before clicking in it.
 const clickInSaveBar = async (id) => {
   await page.waitForFunction(() => {
@@ -62,19 +87,36 @@ const clickInSaveBar = async (id) => {
   });
   await page.click(`#${id}`);
 };
+const saveAndWait = async () => {
+  await clickInSaveBar("save");
+  await page.waitForFunction(() => document.getElementById("savebar").hidden);
+};
 const addLink = async (value) => {
   await page.$eval("#add-url", (input) => (input.value = ""));
   await page.type("#add-url", value);
   await page.keyboard.press("Enter");
 };
+const find = async (value) => {
+  await page.$eval("#find-input", (input) => (input.value = ""));
+  await page.type("#find-input", value || " ");
+  if (!value) await page.keyboard.press("Backspace");
+};
 
-test("the saved list is shown, with nothing to save", async () => {
+test("the saved list is shown: each name links to its room, each slot shows its days and hours", async () => {
   assert.equal(await text("#count"), "2 rooms watched");
   assert.deepEqual(await names(), ["Antique", "Noah"]);
-  assert.deepEqual(await page.$$eval(".when", (nodes) => nodes.map((n) => n.textContent)), ["Any day, any time.", "Fri, Sat 19:00–22:00."]);
+  assert.deepEqual(await shownSlots(), [["7 days any time"], ["2 days 19:00 to 22:00"]]);
+  assert.deepEqual(
+    await page.$$eval(".room-name a", (links) => links.map((a) => [a.href, a.target, a.rel])),
+    [
+      [ANTIQUE.url, "_blank", "noopener noreferrer"],
+      [NOAH.url, "_blank", "noopener noreferrer"],
+    ],
+  );
   assert.equal(await hidden("#savebar"), true);
-  // Noah's strip is lit on two days only; Antique's on all seven.
-  assert.deepEqual(await page.$$eval(".room", (rooms) => rooms.map((room) => room.querySelectorAll(".day.on").length)), [7, 2]);
+  // No room address and no repository name are printed on the page.
+  const body = await text("body");
+  assert.ok(!body.includes("EscapeRoom/Details") && !body.includes(REPO));
 });
 
 test("a link that is not a room page, or a room already listed, is explained and not added", async () => {
@@ -85,26 +127,28 @@ test("a link that is not a room page, or a room already listed, is explained and
   await addLink("https://www.escapeall.gr/el/EscapeRoom/Details/Antique");
   assert.equal(await text("#add-hint"), "Antique is already on the list.");
   assert.deepEqual(await names(), ["Antique", "Noah"]);
+  assert.equal(await dialogOpen(), false);
   assert.equal(await hidden("#savebar"), true);
 });
 
-test("adding a room, limiting its days and hours, and saving puts exactly that on GitHub", async () => {
+test("adding a room opens the slots dialog at once; ticking days and picking hours, then saving, puts exactly that on GitHub", async () => {
   await addLink("www.escapeall.gr/en/EscapeRoom/Details/the-blair-witch-project?from=search#reviews");
+  assert.equal(await dialogOpen(), true);
+  assert.equal(await page.$eval("#slots-name", (input) => input.value), "The Blair Witch Project");
+  assert.equal((await ticked()).length, 7); // starts as every day, any time
+
+  for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday"]) await tick(day);
+  assert.deepEqual(await ticked(), ["Friday", "Saturday", "Sunday"]);
+  await page.select('#slots select[aria-label="Earliest start"]', "19:00");
+  await page.select('#slots select[aria-label="Latest start"]', "22:00");
+  await page.click("#slots-done");
+
+  assert.equal(await dialogOpen(), false);
   assert.deepEqual(await names(), ["The Blair Witch Project", "Antique", "Noah"]);
-  assert.equal(await hidden("#savebar"), false);
-  assert.equal(await page.evaluate(() => document.activeElement.className), "room-name"); // ready to fix the name
+  assert.deepEqual((await shownSlots())[0], ["3 days 19:00 to 22:00"]);
 
-  await clickText(".room:first-child", "Limit the days and hours");
-  assert.equal(await page.$$eval(".room:first-child .days button[aria-pressed=true]", (n) => n.length), 7);
-  await clickText(".room:first-child", "Fri to Sun");
-  await page.select('.room:first-child select[aria-label="Earliest start"]', "19:00");
-  await page.select('.room:first-child select[aria-label="Latest start"]', "22:00");
-  assert.equal(await text(".room:first-child .when"), "Fri, Sat, Sun 19:00–22:00.");
-  assert.equal(await page.$$eval(".room:first-child .day.on", (n) => n.length), 3);
-
-  await clickInSaveBar("save");
-  await page.waitForFunction(() => document.getElementById("savebar").hidden);
-  assert.equal(await text("#toast span"), "Saved. The next check uses the new list.");
+  await saveAndWait();
+  assert.equal(await text("#toast"), "Saved. The next check uses the new list."); // the whole toast, nothing stray after it
   assert.deepEqual(github.json().rooms[0], {
     name: "The Blair Witch Project",
     url: BLAIR,
@@ -115,33 +159,88 @@ test("adding a room, limiting its days and hours, and saving puts exactly that o
   assert.equal(github.state.commits.at(-1).message, "Watchlist: add The Blair Witch Project");
 });
 
-test("a window that ends before it starts is flagged and cannot be saved; past midnight is fine", async () => {
-  await page.select('.room:first-child select[aria-label="Latest start"]', "18:00");
-  assert.match(await text(".room:first-child .rule-problem"), /ends before it starts/);
-  assert.equal(await page.$eval("#save", (button) => button.disabled), true);
-  assert.equal(await text("#save-text"), "The Blair Witch Project has a time window to fix.");
+test("the dialog refuses a slot that cannot work, and Cancel changes nothing", async () => {
+  await clickText(".room:first-child", "Edit slots");
+  assert.equal(await dialogOpen(), true);
 
-  await page.select('.room:first-child select[aria-label="Latest start"]', "01:00");
-  assert.equal(await page.$(".room:first-child .rule-problem"), null);
-  assert.equal(await text(".room:first-child .when"), "Fri, Sat, Sun 19:00–01:00.");
-  assert.equal(await page.$eval("#save", (button) => button.disabled), false);
-  await clickInSaveBar("discard");
+  await page.select('#slots select[aria-label="Latest start"]', "18:00");
+  assert.match(await text("#slots .problem"), /ends before it starts/);
+  assert.equal(await page.$eval("#slots-done", (button) => button.disabled), true);
+
+  await page.select('#slots select[aria-label="Latest start"]', "01:00"); // past midnight is the same evening
+  assert.equal(await page.$("#slots .problem"), null);
+  for (const day of ["Friday", "Saturday", "Sunday"]) await tick(day);
+  assert.equal(await text("#slots .problem"), "Tick at least one day.");
+  assert.equal(await page.$eval("#slots-done", (button) => button.disabled), true);
+
+  await page.click("#slots-cancel");
+  assert.equal(await dialogOpen(), false);
+  assert.deepEqual((await shownSlots())[0], ["3 days 19:00 to 22:00"]);
   assert.equal(await hidden("#savebar"), true);
-  assert.equal(await text(".room:first-child .when"), "Fri, Sat, Sun 19:00–22:00.");
+});
+
+test("a room can have several slots and a new name; every day at any time is saved as no limit", async () => {
+  await clickText(".room:first-child", "Edit slots");
+  await page.$eval("#slots-name", (input) => (input.value = ""));
+  await page.type("#slots-name", "Blair Witch");
+  await page.click("#slots-add");
+  assert.equal(await page.$$eval("#slots .slot-edit", (n) => n.length), 2);
+  // Second slot: Saturday only, late.
+  for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Sunday"]) {
+    await page.click(`#slots .slot-edit:nth-child(2) input[type=checkbox][aria-label="${day}"]`);
+  }
+  await page.select('#slots .slot-edit:nth-child(2) select[aria-label="Earliest start"]', "23:00");
+  await page.click("#slots-done");
+  assert.deepEqual(await names(), ["Blair Witch", "Antique", "Noah"]);
+  assert.deepEqual((await shownSlots())[0], ["3 days 19:00 to 22:00", "1 days from 23:00"]);
+
+  // Noah: tick every day and clear the hours -> no limit at all.
+  await clickText(".room:nth-child(3)", "Edit slots");
+  await clickText("#slots", "Every day");
+  await page.select('#slots select[aria-label="Earliest start"]', "");
+  await page.select('#slots select[aria-label="Latest start"]', "");
+  await page.click("#slots-done");
+  assert.deepEqual((await shownSlots())[2], ["7 days any time"]);
+
+  await saveAndWait();
+  const [blair, , noah] = github.json().rooms;
+  assert.equal(blair.name, "Blair Witch");
+  assert.deepEqual(blair.rules, [{ days: ["fri", "sat", "sun"], from: "19:00", to: "22:00" }, { days: ["sat"], from: "23:00" }]);
+  assert.deepEqual(noah.rules, []);
+  assert.equal(github.state.commits.at(-1).message, "Watchlist: update Blair Witch, Noah");
+});
+
+test("the search box narrows the list by name or by link", async () => {
+  await find("noa");
+  assert.deepEqual(await names(), ["Noah"]);
+  assert.equal(await text("#count"), "1 of 3 rooms");
+
+  await find("https://www.escapeall.gr/el/EscapeRoom/Details/antique?x=1"); // a pasted link, any language
+  assert.deepEqual(await names(), ["Antique"]);
+  await find("blair-witch"); // part of the address
+  assert.deepEqual(await names(), ["Blair Witch"]);
+
+  await find("zzz");
+  assert.deepEqual(await names(), []);
+  assert.equal(await text("#empty"), "No room on the list matches “zzz”.");
+
+  await find("");
+  assert.deepEqual(await names(), ["Blair Witch", "Antique", "Noah"]);
+  assert.equal(await text("#count"), "3 rooms watched");
+  assert.equal(await hidden("#savebar"), true); // searching is not a change
 });
 
 test("pausing and removing: a removed room can be brought back before saving", async () => {
   await clickText(".room:nth-child(2)", "Pause");
   assert.equal(await text("#count"), "2 rooms watched, 1 paused");
   await clickText(".room:nth-child(3)", "Remove");
-  assert.deepEqual(await names(), ["The Blair Witch Project", "Antique"]);
+  assert.deepEqual(await names(), ["Blair Witch", "Antique"]);
   assert.equal(await text("#toast span"), "Removed Noah.");
   await clickText("#toast", "Undo");
-  assert.deepEqual(await names(), ["The Blair Witch Project", "Antique", "Noah"]);
+  assert.deepEqual(await names(), ["Blair Witch", "Antique", "Noah"]);
 
-  await clickInSaveBar("save");
-  await page.waitForFunction(() => document.getElementById("savebar").hidden);
-  assert.deepEqual(github.json().rooms.map((room) => [room.name, room.paused]), [["The Blair Witch Project", false], ["Antique", true], ["Noah", false]]);
+  await saveAndWait();
+  assert.deepEqual(github.json().rooms.map((room) => [room.name, room.paused]), [["Blair Witch", false], ["Antique", true], ["Noah", false]]);
   assert.equal(github.state.commits.at(-1).message, "Watchlist: update Antique");
 });
 
@@ -151,6 +250,7 @@ test("a change made elsewhere is not overwritten: the page offers to load the la
   await clickInSaveBar("save");
   await page.waitForFunction(() => !document.getElementById("notice").hidden);
   assert.match(await text("#notice p"), /changed somewhere else/);
+  assert.ok((await text("#notice")).endsWith("Load the latest"));
   assert.deepEqual(github.json().rooms, [NOAH]);
 
   await clickText("#notice", "Load the latest");
@@ -162,7 +262,7 @@ test("a change made elsewhere is not overwritten: the page offers to load the la
 test("room names are shown as text, never run as markup", async () => {
   github.editElsewhere({ version: 1, rooms: [{ ...NOAH, name: '<img src=x onerror="window.pwned=1">' }] });
   await page.reload();
-  await page.waitForSelector(".room");
+  await waitForRooms();
   assert.deepEqual(await names(), ['<img src=x onerror="window.pwned=1">']);
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.equal(await page.$(".room img"), null);

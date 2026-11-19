@@ -13,14 +13,11 @@
   <body>
     <header class="masthead">
       <h1>Rooms I want to play</h1>
-      <p class="lede">
-        Paste a room from escapeall.gr and say when you could go. Telegram tells you when a slot that fits is free.
-      </p>
     </header>
 
     <main>
       <form id="add" class="add" novalidate>
-        <label for="add-url">Room link</label>
+        <label for="add-url">Add a room</label>
         <div class="add-row">
           <input
             id="add-url"
@@ -29,7 +26,7 @@
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
-            placeholder="https://www.escapeall.gr/en/EscapeRoom/Details/…"
+            placeholder="Paste a room link from escapeall.gr"
             aria-describedby="add-hint"
           />
           <button type="submit" class="primary">Add room</button>
@@ -42,14 +39,38 @@
       <section aria-labelledby="count">
         <div class="list-head">
           <h2 id="count">Loading the watchlist</h2>
-          <p id="source" class="quiet"></p>
+          <div id="find" class="find" role="search" hidden>
+            <label for="find-input" class="sr-only">Find a room on the list</label>
+            <input
+              id="find-input"
+              type="search"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Find by name or link"
+            />
+          </div>
         </div>
         <ol id="rooms" class="rooms"></ol>
-        <p id="empty" class="empty" hidden>
-          Nothing on the list yet. Find a room on escapeall.gr, copy its address and paste it above.
-        </p>
+        <p id="empty" class="empty" hidden></p>
       </section>
     </main>
+
+    <dialog id="slots" class="sheet" aria-labelledby="slots-title">
+      <form id="slots-form" novalidate>
+        <h2 id="slots-title">When could you play?</h2>
+        <label class="field">
+          <span class="field-name">Room name</span>
+          <input id="slots-name" type="text" maxlength="80" autocomplete="off" />
+        </label>
+        <div id="slots-list" class="slots-list"></div>
+        <button type="button" id="slots-add" data-key="slots-add">Add another slot</button>
+        <div class="sheet-foot">
+          <button type="button" id="slots-cancel">Cancel</button>
+          <button type="submit" id="slots-done" class="primary">Done</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="savebar" class="savebar" hidden>
       <p id="save-text"></p>

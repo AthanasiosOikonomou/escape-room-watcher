@@ -1,25 +1,26 @@
-import { describeRule, eveningMinutes } from "/shared/rules.js";
+import { eveningMinutes } from "/shared/rules.js";
 
 const ROOM_LINK = /^https:\/\/(?:www\.)?escapeall\.gr\/(en|el)\/EscapeRoom\/Details\/([\w-]+)\/?(?:[?#].*)?$/i;
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const DAY_LABEL = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+const DAY_LETTER = { mon: "M", tue: "T", wed: "W", thu: "T", fri: "F", sat: "S", sun: "S" };
+const DAY_SHORT = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 const DAY_NAME = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday" };
 
-// The strip shows 08:00 to 02:00 at night; sessions after midnight belong to the evening before.
-const AXIS_START = 8 * 60;
-const AXIS_END = 26 * 60;
+// Start times offered: 08:00 to 02:00 at night. Sessions after midnight belong to the evening before.
 const TIMES = [];
-for (let minutes = AXIS_START; minutes <= AXIS_END; minutes += 30) {
+for (let minutes = 8 * 60; minutes <= 26 * 60; minutes += 30) {
   TIMES.push(`${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`);
 }
 
 const $ = (id) => document.getElementById(id);
 
-/** @type {{ watchlist: object, sha: string|null }|null} */
+/** @type {{ watchlist: object, sha: string|null }|null} what GitHub holds */
 let saved = null;
-/** @type {{ name: string, url: string, paused: boolean, rules: object[] }[]} */
+/** @type {{ name: string, url: string, paused: boolean, rules: object[] }[]} what the page shows */
 let draft = [];
-let openUrl = null; // the room whose times are being edited
+/** @type {{ url: string, name: string, slots: object[] }|null} the room open in the dialog */
+let editing = null;
+let query = "";
 let busy = false;
 
 // ---------- small helpers ----------
@@ -50,100 +51,170 @@ function nameFromSlug(slug) {
 
 const slugOf = (url) => new URL(url).pathname.split("/").filter(Boolean).pop().toLowerCase();
 
-/** A rule as the page edits it: the seven days are always spelled out. */
-function ruleForEditing(rule) {
+/** A slot as the dialog edits it: the days are always spelled out. */
+function slotForEditing(rule = {}) {
   return {
     days: Array.isArray(rule.days) && rule.days.length > 0 ? WEEK.filter((day) => rule.days.includes(day)) : [...WEEK],
     from: rule.from,
     to: rule.to,
     dateFrom: rule.dateFrom,
     dateTo: rule.dateTo,
+    showDates: Boolean(rule.dateFrom || rule.dateTo),
   };
 }
 
-/** A rule as it is saved: nothing that does not restrict. */
-function ruleForSaving(rule) {
-  const out = {};
-  if (rule.days.length < 7) out.days = WEEK.filter((day) => rule.days.includes(day));
-  for (const key of ["from", "to", "dateFrom", "dateTo"]) if (rule[key]) out[key] = rule[key];
-  return out;
+/** A slot as it is saved: only what restricts. */
+function ruleFromSlot(slot) {
+  const rule = {};
+  if (slot.days.length < 7) rule.days = WEEK.filter((day) => slot.days.includes(day));
+  for (const key of ["from", "to", "dateFrom", "dateTo"]) if (slot[key]) rule[key] = slot[key];
+  return rule;
 }
 
-function ruleProblem(rule) {
-  if (rule.days.length === 0) return "Pick at least one day.";
-  if (rule.from && rule.to && eveningMinutes(rule.from) > eveningMinutes(rule.to)) {
-    return "This window ends before it starts. Hours after midnight count as late night of the same evening.";
+function slotProblem(slot) {
+  if (slot.days.length === 0) return "Tick at least one day.";
+  if (slot.from && slot.to && eveningMinutes(slot.from) > eveningMinutes(slot.to)) {
+    return "This slot ends before it starts. Hours after midnight count as late night of the same evening.";
   }
-  if (rule.dateFrom && rule.dateTo && rule.dateFrom > rule.dateTo) return "The first date is after the last date.";
+  if (slot.dateFrom && slot.dateTo && slot.dateFrom > slot.dateTo) return "The first date is after the last date.";
   return null;
 }
 
-function draftForSaving() {
-  return {
-    version: 1,
-    rooms: draft.map((room) => ({
-      name: room.name.trim(),
-      url: room.url,
-      paused: room.paused,
-      rules: room.rules.map(ruleForSaving),
-    })),
-  };
+/** Slots that restrict nothing mean "everything", which is saved as no rules at all. */
+function rulesFromSlots(slots) {
+  const rules = slots.map(ruleFromSlot);
+  return rules.some((rule) => Object.keys(rule).length === 0) ? [] : rules;
 }
 
-function problems() {
-  const list = [];
-  for (const room of draft) {
-    if (room.name.trim() === "") list.push(`A room has no name.`);
-    if (room.rules.some(ruleProblem)) list.push(`${room.name || "A room"} has a time window to fix.`);
-  }
-  return list;
-}
+const draftForSaving = () => ({
+  version: 1,
+  rooms: draft.map((room) => ({ name: room.name, url: room.url, paused: room.paused, rules: room.rules })),
+});
 
 const isDirty = () => saved !== null && JSON.stringify(draftForSaving()) !== JSON.stringify(saved.watchlist);
 
-// ---------- the week strip ----------
+// ---------- how a room's slots are shown in the list ----------
 
-/** Lit stretches of one day, as [start, end] minutes on the evening clock. */
-function litStretches(room, day) {
-  if (room.rules.length === 0) return [[AXIS_START, AXIS_END]];
-  const stretches = [];
-  for (const rule of room.rules) {
-    if (ruleProblem(rule) || !rule.days.includes(day)) continue;
-    const start = Math.max(AXIS_START, rule.from ? eveningMinutes(rule.from) : AXIS_START);
-    const end = Math.min(AXIS_END, rule.to ? eveningMinutes(rule.to) : AXIS_END);
-    if (end >= start) stretches.push([start, end]);
-  }
-  return stretches;
+function shortDate(iso) {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-function weekStrip(room) {
-  const span = AXIS_END - AXIS_START;
-  const days = WEEK.map((day) => {
-    const stretches = litStretches(room, day);
-    const track = el(
+function timeText(rule) {
+  if (rule.from && rule.to) return rule.from === rule.to ? `at ${rule.from}` : `${rule.from} to ${rule.to}`;
+  if (rule.from) return `from ${rule.from}`;
+  if (rule.to) return `until ${rule.to}`;
+  return "any time";
+}
+
+function datesText(rule) {
+  if (rule.dateFrom && rule.dateTo) return `${shortDate(rule.dateFrom)} to ${shortDate(rule.dateTo)}`;
+  if (rule.dateFrom) return `from ${shortDate(rule.dateFrom)}`;
+  if (rule.dateTo) return `until ${shortDate(rule.dateTo)}`;
+  return "";
+}
+
+function slotLine(rule) {
+  const days = Array.isArray(rule.days) && rule.days.length > 0 ? rule.days : WEEK;
+  const spoken = `${days.length === 7 ? "Every day" : days.map((day) => DAY_NAME[day]).join(", ")}, ${timeText(rule)}${datesText(rule) ? `, ${datesText(rule)}` : ""}`;
+  return el(
+    "li",
+    { class: "slot" },
+    el("span", { class: "sr-only", text: spoken }),
+    el(
+      "span",
+      { class: "dots", "aria-hidden": "true" },
+      WEEK.map((day) => el("span", { class: days.includes(day) ? "dot on" : "dot", text: DAY_LETTER[day] })),
+    ),
+    el("span", { class: "slot-time", "aria-hidden": "true", text: timeText(rule) }),
+    datesText(rule) && el("span", { class: "slot-dates", "aria-hidden": "true", text: datesText(rule) }),
+  );
+}
+
+// ---------- the list ----------
+
+function matches(room) {
+  const q = query.trim().toLowerCase();
+  if (q === "") return true;
+  const link = ROOM_LINK.exec(q.startsWith("http") ? query.trim() : `https://${query.trim()}`);
+  if (link) return slugOf(room.url) === link[2].toLowerCase();
+  return room.name.toLowerCase().includes(q) || room.url.toLowerCase().includes(q);
+}
+
+function roomRow(room) {
+  const rules = room.rules.length > 0 ? room.rules : [{}];
+  return el(
+    "li",
+    { class: room.paused ? "room paused" : "room", "data-url": room.url },
+    el(
       "div",
-      { class: "track" },
-      stretches.map(([start, end]) => {
-        const lit = el("i");
-        lit.style.top = `${((start - AXIS_START) / span) * 100}%`;
-        lit.style.height = `${((end - start) / span) * 100}%`;
-        return lit;
-      }),
-    );
-    return el("div", { class: stretches.length ? "day on" : "day" }, el("span", { text: DAY_LABEL[day] }), track);
-  });
-  const hours = el("div", { class: "hours" }, el("span", { text: "08:00" }), el("span", { text: "17:00" }), el("span", { text: "02:00" }));
-  return el("div", { class: "week", "aria-hidden": "true" }, hours, days);
+      { class: "room-top" },
+      el(
+        "h3",
+        { class: "room-name" },
+        el("a", { href: room.url, target: "_blank", rel: "noopener noreferrer", text: room.name, title: "Open this room on EscapeAll" }),
+      ),
+      room.paused && el("span", { class: "tag", text: "Paused" }),
+      el(
+        "div",
+        { class: "room-actions" },
+        el("button", { type: "button", class: "plain", text: "Edit slots", "data-key": `${room.url}|edit`, onclick: () => openSlots(room) }),
+        el("button", {
+          type: "button",
+          class: "plain",
+          text: room.paused ? "Resume" : "Pause",
+          "data-key": `${room.url}|pause`,
+          onclick: () => {
+            room.paused = !room.paused;
+            render(`${room.url}|pause`);
+          },
+        }),
+        el("button", { type: "button", class: "plain danger", text: "Remove", onclick: () => removeRoom(room) }),
+      ),
+    ),
+    el("ul", { class: "slots" }, rules.map(slotLine)),
+  );
 }
 
-function whenText(room) {
-  if (room.rules.length === 0) return "Any day, any time.";
-  const valid = room.rules.filter((rule) => !ruleProblem(rule));
-  if (valid.length === 0) return "No time window is set up correctly yet.";
-  return `${valid.map((rule) => describeRule(ruleForSaving(rule))).join("; ")}.`;
+function renderSaveBar() {
+  const dirty = isDirty();
+  $("savebar").hidden = !dirty;
+  $("save-text").textContent = busy ? "Saving to GitHub" : "You have changes that are not saved yet.";
+  $("save").disabled = busy;
+  $("discard").disabled = busy;
 }
 
-// ---------- rendering ----------
+function render(focusKey) {
+  const shown = draft.filter(matches);
+  $("rooms").replaceChildren(...shown.map(roomRow));
+
+  const active = draft.filter((room) => !room.paused).length;
+  const paused = draft.length - active;
+  const searching = query.trim() !== "";
+  $("count").textContent =
+    saved === null
+      ? "Loading the watchlist"
+      : draft.length === 0
+        ? "No rooms yet"
+        : searching
+          ? `${shown.length} of ${draft.length} ${draft.length === 1 ? "room" : "rooms"}`
+          : `${active} ${active === 1 ? "room" : "rooms"} watched${paused ? `, ${paused} paused` : ""}`;
+
+  $("find").hidden = saved === null || draft.length === 0;
+  const empty = $("empty");
+  empty.hidden = saved === null || shown.length > 0;
+  empty.textContent =
+    draft.length === 0
+      ? "Nothing on the list yet. Find a room on escapeall.gr, copy its address and paste it above."
+      : `No room on the list matches “${query.trim()}”.`;
+  renderSaveBar();
+
+  if (focusKey) {
+    [...document.querySelectorAll("[data-key]")].find((node) => node.dataset.key === focusKey)?.focus();
+  }
+}
+
+// ---------- the slots dialog ----------
 
 function timeSelect(label, value, onPick, dataKey) {
   const select = el(
@@ -158,227 +229,164 @@ function timeSelect(label, value, onPick, dataKey) {
   return select;
 }
 
-function ruleEditor(room, rule, index) {
+function slotEditor(slot, index) {
+  const key = (part) => `slot|${index}|${part}`;
   const change = (mutate, focusKey) => {
     mutate();
-    render(focusKey);
+    renderSlots(focusKey);
   };
-  const key = (part) => `${room.url}|${index}|${part}`;
-  const setDays = (days, focusKey) => change(() => (rule.days = WEEK.filter((day) => days.includes(day))), focusKey);
-  const problem = ruleProblem(rule);
-  const hasDates = Boolean(rule.dateFrom || rule.dateTo || rule.showDates);
+  const setDays = (days, focusKey) => change(() => (slot.days = WEEK.filter((day) => days.includes(day))), focusKey);
+  const problem = slotProblem(slot);
+  const many = editing.slots.length > 1;
 
   return el(
-    "div",
-    { class: "rule" },
+    "fieldset",
+    { class: "slot-edit" },
+    many && el("legend", { text: `Slot ${index + 1}` }),
     el(
       "div",
-      { class: "rule-row" },
-      el("span", { text: "Days" }),
+      { class: "field" },
+      el("span", { class: "field-name", id: key("days-label"), text: "Days" }),
       el(
         "div",
-        { class: "days", role: "group", "aria-label": "Days of the week" },
+        { class: "checks", role: "group", "aria-labelledby": key("days-label") },
         WEEK.map((day) =>
-          el("button", {
-            type: "button",
-            text: DAY_LABEL[day],
-            "aria-label": DAY_NAME[day],
-            "aria-pressed": String(rule.days.includes(day)),
-            "data-key": key(day),
-            onclick: () =>
-              setDays(rule.days.includes(day) ? rule.days.filter((d) => d !== day) : [...rule.days, day], key(day)),
-          }),
+          el(
+            "label",
+            { class: "check" },
+            el("input", {
+              type: "checkbox",
+              checked: slot.days.includes(day),
+              "data-key": key(day),
+              "aria-label": DAY_NAME[day],
+              onchange: (event) =>
+                setDays(event.target.checked ? [...slot.days, day] : slot.days.filter((d) => d !== day), key(day)),
+            }),
+            el("span", { text: DAY_SHORT[day] }),
+          ),
         ),
       ),
-    ),
-    el(
-      "div",
-      { class: "shortcuts" },
-      el("button", { type: "button", text: "Every day", "data-key": key("all"), onclick: () => setDays(WEEK, key("all")) }),
-      el("button", { type: "button", text: "Fri to Sun", "data-key": key("we"), onclick: () => setDays(["fri", "sat", "sun"], key("we")) }),
-      el("button", { type: "button", text: "Mon to Thu", "data-key": key("wd"), onclick: () => setDays(["mon", "tue", "wed", "thu"], key("wd")) }),
-    ),
-    el(
-      "div",
-      { class: "rule-row" },
-      el("span", { text: "Starts" }),
-      el("span", { text: "from" }),
-      timeSelect("Earliest start", rule.from, (value) => change(() => (rule.from = value), key("from")), key("from")),
-      el("span", { text: "until" }),
-      timeSelect("Latest start", rule.to, (value) => change(() => (rule.to = value), key("to")), key("to")),
-    ),
-    hasDates &&
       el(
         "div",
-        { class: "rule-row" },
-        el("span", { text: "Dates" }),
+        { class: "shortcuts" },
+        el("button", { type: "button", text: "Every day", "data-key": key("all"), onclick: () => setDays(WEEK, key("all")) }),
+        el("button", { type: "button", text: "Fri to Sun", "data-key": key("we"), onclick: () => setDays(["fri", "sat", "sun"], key("we")) }),
+        el("button", { type: "button", text: "Mon to Thu", "data-key": key("wd"), onclick: () => setDays(["mon", "tue", "wed", "thu"], key("wd")) }),
+      ),
+    ),
+    el(
+      "div",
+      { class: "field" },
+      el("span", { class: "field-name", text: "Start time" }),
+      el(
+        "div",
+        { class: "range" },
         el("span", { text: "from" }),
-        el("input", {
-          type: "date",
-          "aria-label": "First date",
-          value: rule.dateFrom ?? "",
-          onchange: (event) => change(() => (rule.dateFrom = event.target.value || undefined)),
-        }),
-        el("span", { text: "to" }),
-        el("input", {
-          type: "date",
-          "aria-label": "Last date",
-          value: rule.dateTo ?? "",
-          onchange: (event) => change(() => (rule.dateTo = event.target.value || undefined)),
-        }),
-      ),
-    problem && el("p", { class: "rule-problem", text: problem }),
-    el(
-      "div",
-      { class: "rule-foot" },
-      hasDates
-        ? el("button", {
-            type: "button",
-            class: "plain",
-            text: "Any dates",
-            "data-key": key("dates"),
-            onclick: () =>
-              change(() => {
-                rule.dateFrom = undefined;
-                rule.dateTo = undefined;
-                rule.showDates = false;
-              }, key("dates")),
-          })
-        : el("button", {
-            type: "button",
-            class: "plain",
-            text: "Only between certain dates",
-            "data-key": key("dates"),
-            onclick: () => change(() => (rule.showDates = true), key("dates")),
-          }),
-      el("button", {
-        type: "button",
-        class: "plain danger",
-        text: "Remove this window",
-        onclick: () => change(() => room.rules.splice(index, 1), `${room.url}|add-rule`),
-      }),
-    ),
-  );
-}
-
-function roomRow(room) {
-  const open = openUrl === room.url;
-  const toggleOpen = () => {
-    openUrl = open ? null : room.url;
-    render(`${room.url}|edit`);
-  };
-  const addRule = () => {
-    room.rules.push(ruleForEditing({}));
-    openUrl = room.url;
-    render(`${room.url}|add-rule`);
-  };
-
-  const name = el("input", {
-    class: "room-name",
-    type: "text",
-    value: room.name,
-    maxLength: 80,
-    "aria-label": "Room name",
-    "data-key": `${room.url}|name`,
-    oninput: (event) => {
-      room.name = event.target.value;
-      renderSaveBar();
-    },
-  });
-
-  return el(
-    "li",
-    { class: room.paused ? "room paused" : "room" },
-    el(
-      "div",
-      { class: "room-top" },
-      name,
-      room.paused && el("span", { class: "tag", text: "Paused" }),
-      el(
-        "div",
-        { class: "room-actions" },
-        el("button", {
-          type: "button",
-          class: "plain",
-          text: open ? "Done" : "Edit times",
-          "aria-expanded": String(open),
-          "data-key": `${room.url}|edit`,
-          onclick: toggleOpen,
-        }),
-        el("button", {
-          type: "button",
-          class: "plain",
-          text: room.paused ? "Resume" : "Pause",
-          "data-key": `${room.url}|pause`,
-          onclick: () => {
-            room.paused = !room.paused;
-            render(`${room.url}|pause`);
-          },
-        }),
-        el("button", { type: "button", class: "plain danger", text: "Remove", onclick: () => removeRoom(room) }),
+        timeSelect("Earliest start", slot.from, (value) => change(() => (slot.from = value), key("from")), key("from")),
+        el("span", { text: "until" }),
+        timeSelect("Latest start", slot.to, (value) => change(() => (slot.to = value), key("to")), key("to")),
       ),
     ),
-    el(
-      "p",
-      { class: "room-link" },
-      el("a", { href: room.url, target: "_blank", rel: "noopener noreferrer", text: room.url.replace(/^https:\/\/(www\.)?/, "") }),
-    ),
-    weekStrip(room),
-    el("p", { class: "when", text: whenText(room) }),
-    open &&
+    slot.showDates &&
       el(
         "div",
-        { class: "editor" },
-        room.rules.map((rule, index) => ruleEditor(room, rule, index)),
+        { class: "field" },
+        el("span", { class: "field-name", text: "Dates" }),
         el(
           "div",
-          { class: "editor-foot" },
-          el("button", {
-            type: "button",
-            text: room.rules.length === 0 ? "Limit the days and hours" : "Add another time window",
-            "data-key": `${room.url}|add-rule`,
-            onclick: addRule,
+          { class: "range" },
+          el("span", { text: "from" }),
+          el("input", {
+            type: "date",
+            "aria-label": "First date",
+            value: slot.dateFrom ?? "",
+            "data-key": key("date-from"),
+            onchange: (event) => change(() => (slot.dateFrom = event.target.value || undefined), key("date-from")),
+          }),
+          el("span", { text: "to" }),
+          el("input", {
+            type: "date",
+            "aria-label": "Last date",
+            value: slot.dateTo ?? "",
+            "data-key": key("date-to"),
+            onchange: (event) => change(() => (slot.dateTo = event.target.value || undefined), key("date-to")),
           }),
         ),
       ),
+    problem && el("p", { class: "problem", text: problem }),
+    el(
+      "div",
+      { class: "slot-foot" },
+      el("button", {
+        type: "button",
+        class: "plain",
+        text: slot.showDates ? "Any dates" : "Only between certain dates",
+        "data-key": key("dates"),
+        onclick: () =>
+          change(() => {
+            slot.showDates = !slot.showDates;
+            if (!slot.showDates) {
+              slot.dateFrom = undefined;
+              slot.dateTo = undefined;
+            }
+          }, key("dates")),
+      }),
+      many &&
+        el("button", {
+          type: "button",
+          class: "plain danger",
+          text: "Remove this slot",
+          onclick: () => change(() => editing.slots.splice(index, 1), "slots-add"),
+        }),
+    ),
   );
 }
 
-function renderSaveBar() {
-  const dirty = isDirty();
-  const issues = dirty ? problems() : [];
-  $("savebar").hidden = !dirty;
-  $("save-text").textContent = busy ? "Saving to GitHub" : issues.length ? issues[0] : "You have changes that are not saved yet.";
-  $("save").disabled = busy || issues.length > 0;
-  $("discard").disabled = busy;
+function renderSlots(focusKey) {
+  $("slots-list").replaceChildren(...editing.slots.map(slotEditor));
+  const nameMissing = $("slots-name").value.trim() === "";
+  $("slots-done").disabled = nameMissing || editing.slots.some(slotProblem);
+  if (focusKey) {
+    [...$("slots").querySelectorAll("[data-key]")].find((node) => node.dataset.key === focusKey)?.focus();
+  }
 }
 
-function render(focusKey) {
-  const list = $("rooms");
-  list.replaceChildren(...draft.map(roomRow));
+function openSlots(room) {
+  editing = {
+    url: room.url,
+    name: room.name,
+    slots: room.rules.length > 0 ? room.rules.map(slotForEditing) : [slotForEditing()],
+  };
+  $("slots-name").value = room.name;
+  renderSlots();
+  $("slots").showModal();
+  $("slots").querySelector('input[type="checkbox"]').focus();
+}
 
-  const active = draft.filter((room) => !room.paused).length;
-  const paused = draft.length - active;
-  $("count").textContent =
-    saved === null
-      ? "Loading the watchlist"
-      : draft.length === 0
-        ? "No rooms yet"
-        : `${active} ${active === 1 ? "room" : "rooms"} watched${paused ? `, ${paused} paused` : ""}`;
-  $("empty").hidden = saved === null || draft.length > 0;
-  renderSaveBar();
+function closeSlots() {
+  const url = editing?.url;
+  editing = null;
+  if ($("slots").open) $("slots").close();
+  if (url) render(`${url}|edit`);
+}
 
-  if (focusKey) {
-    const target = [...document.querySelectorAll("[data-key]")].find((node) => node.dataset.key === focusKey);
-    target?.focus();
+function applySlots(event) {
+  event.preventDefault();
+  if (!editing || $("slots-done").disabled) return;
+  const room = draft.find((r) => r.url === editing.url);
+  if (room) {
+    room.name = $("slots-name").value.trim();
+    room.rules = rulesFromSlots(editing.slots);
   }
+  closeSlots();
 }
 
 // ---------- notices and toasts ----------
 
 function showNotice(text, actionLabel, action) {
   const notice = $("notice");
-  notice.replaceChildren(el("p", { text }), actionLabel ? el("button", { type: "button", text: actionLabel, onclick: action }) : null);
+  notice.replaceChildren(el("p", { text }));
+  if (actionLabel) notice.append(el("button", { type: "button", text: actionLabel, onclick: action }));
   notice.hidden = false;
 }
 
@@ -388,19 +396,19 @@ let toastTimer;
 function toast(text, actionLabel, action) {
   const box = $("toast");
   clearTimeout(toastTimer);
-  box.replaceChildren(
-    el("span", { text }),
-    actionLabel
-      ? el("button", {
-          type: "button",
-          text: actionLabel,
-          onclick: () => {
-            box.hidden = true;
-            action();
-          },
-        })
-      : null,
-  );
+  box.replaceChildren(el("span", { text }));
+  if (actionLabel) {
+    box.append(
+      el("button", {
+        type: "button",
+        text: actionLabel,
+        onclick: () => {
+          box.hidden = true;
+          action();
+        },
+      }),
+    );
+  }
   box.hidden = false;
   toastTimer = setTimeout(() => (box.hidden = true), actionLabel ? 8000 : 4000);
 }
@@ -431,30 +439,29 @@ function addRoom(event) {
   if (existing) return setHint(`${existing.name} is already on the list.`, "error");
   if (draft.length >= 40) return setHint("The list is full (40 rooms). Remove one first.", "error");
 
-  const url = `https://www.escapeall.gr/${language.toLowerCase()}/EscapeRoom/Details/${slug}`;
-  draft.unshift({ name: nameFromSlug(slug), url, paused: false, rules: [] });
-  openUrl = url;
+  const room = { name: nameFromSlug(slug), url: `https://www.escapeall.gr/${language.toLowerCase()}/EscapeRoom/Details/${slug}`, paused: false, rules: [] };
+  draft.unshift(room);
   input.value = "";
-  setHint("Added. Check the name, set the days and hours, then save.");
-  render(`${url}|name`);
+  setHint("");
+  query = "";
+  $("find-input").value = "";
+  render();
+  openSlots(room); // straight to the days and hours
 }
 
 function removeRoom(room) {
   const index = draft.indexOf(room);
   draft.splice(index, 1);
-  if (openUrl === room.url) openUrl = null;
   render();
-  toast(`Removed ${room.name || "the room"}.`, "Undo", () => {
+  toast(`Removed ${room.name}.`, "Undo", () => {
     draft.splice(Math.min(index, draft.length), 0, room);
-    render(`${room.url}|name`);
+    render(`${room.url}|edit`);
   });
 }
 
 function adopt(result) {
   saved = { watchlist: result.watchlist, sha: result.sha };
-  draft = result.watchlist.rooms.map((room) => ({ ...room, rules: room.rules.map(ruleForEditing) }));
-  $("source").textContent = `Saved in ${result.repo ?? $("source").dataset.repo} on GitHub`;
-  if (result.repo) $("source").dataset.repo = result.repo;
+  draft = result.watchlist.rooms.map((room) => ({ ...room, rules: room.rules.map((rule) => ({ ...rule })) }));
 }
 
 async function request(method, body) {
@@ -473,7 +480,6 @@ async function load() {
     const { ok, data } = await request("GET");
     if (!ok) throw new Error(data.error ?? "The watchlist could not be loaded.");
     adopt(data);
-    openUrl = null;
     render();
   } catch (error) {
     $("count").textContent = "The watchlist could not be loaded";
@@ -482,16 +488,14 @@ async function load() {
 }
 
 async function save() {
-  if (busy || problems().length > 0) return;
+  if (busy) return;
   busy = true;
   hideNotice();
   renderSaveBar();
   try {
     const { ok, status, data } = await request("PUT", { watchlist: draftForSaving(), sha: saved.sha });
     if (ok) {
-      const open = openUrl;
       adopt(data);
-      openUrl = draft.some((room) => room.url === open) ? open : null;
       toast("Saved. The next check uses the new list.");
     } else if (status === 409) {
       showNotice("The list was changed somewhere else since this page loaded it. Load the latest version, then make your changes again.", "Load the latest", load);
@@ -508,8 +512,7 @@ async function save() {
 
 function discard() {
   if (saved === null) return;
-  adopt({ watchlist: saved.watchlist, sha: saved.sha });
-  openUrl = null;
+  adopt(saved);
   hideNotice();
   setHint("");
   render();
@@ -517,8 +520,31 @@ function discard() {
 
 $("add").addEventListener("submit", addRoom);
 $("add-url").addEventListener("input", () => setHint(""));
+$("find-input").addEventListener("input", (event) => {
+  query = event.target.value;
+  render();
+});
 $("save").addEventListener("click", save);
 $("discard").addEventListener("click", discard);
+$("slots-form").addEventListener("submit", applySlots);
+$("slots-cancel").addEventListener("click", closeSlots);
+$("slots-add").addEventListener("click", () => {
+  editing.slots.push(slotForEditing());
+  renderSlots(`slot|${editing.slots.length - 1}|mon`);
+});
+$("slots-name").addEventListener("input", () => renderSlots());
+// Esc and a click on the backdrop close the dialog without applying.
+$("slots").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeSlots();
+});
+$("slots").addEventListener("click", (event) => {
+  // Only a real pointer click outside the dialog's box counts as "outside".
+  const box = $("slots").getBoundingClientRect();
+  const pointer = event.detail > 0;
+  const outside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  if (pointer && outside) closeSlots();
+});
 window.addEventListener("beforeunload", (event) => {
   if (isDirty()) event.preventDefault();
 });
