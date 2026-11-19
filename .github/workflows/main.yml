@@ -1,23 +1,83 @@
 name: Escape Room Availability Check
 
 on:
-  workflow_dispatch:       # allow manual runs from GitHub UI
+  workflow_dispatch: # manual runs from the Actions tab
+    inputs:
+      dry_run:
+        description: "Check without sending Telegram messages"
+        type: boolean
+        default: false
+      rooms:
+        description: "Only these rooms (end of the room URL, comma separated). Empty = all"
+        type: string
+        default: ""
   schedule:
-    - cron: '0 */2 * * *'
+    # Every 30 minutes, off the top of the hour, where GitHub's scheduler is busiest.
+    - cron: "7,37 * * * *"
+
+permissions:
+  contents: read
+
+# Never two runs at once: a late run waits for the one before it.
+concurrency:
+  group: escape-room-watch
+  cancel-in-progress: false
 
 jobs:
   check-availability:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
+
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
+          cache: npm
+
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      # npm no longer runs Puppeteer's download script by itself, so Chrome is
+      # installed explicitly and kept between runs.
+      - name: Restore Chrome
+        id: chrome
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/puppeteer
+          key: puppeteer-chrome-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chrome
+        if: steps.chrome.outputs.cache-hit != 'true'
+        run: npx puppeteer browsers install chrome
+
+      # What was last sent, and whether the site refused us recently. A cache
+      # entry cannot be overwritten, so every run saves a new one and the next
+      # run restores the most recent.
+      - name: Restore watcher state
+        uses: actions/cache/restore@v6
+        with:
+          path: .state
+          key: watcher-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: watcher-state-
+
       - name: Run availability check
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           ONLY_CHAT_ID: ${{ secrets.ONLY_CHAT_ID }}
-        run: node escape_availability.js
+          DRY_RUN: ${{ inputs.dry_run }}
+          ONLY_ROOMS: ${{ inputs.rooms }}
+        run: |
+          code=0
+          node src/cli.js || code=$?
+          # 3 = still cooling down after a refusal: nothing was requested, not a failure.
+          if [ "$code" -eq 3 ]; then exit 0; fi
+          exit "$code"
+
+      - name: Save watcher state
+        if: always() && hashFiles('.state/**') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: .state
+          key: watcher-state-${{ github.run_id }}-${{ github.run_attempt }}

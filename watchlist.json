@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "rooms": [
+    {
+      "name": "Scream",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/scream",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Jack Outside the Box",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/jack-outside-the-box",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Antique",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/antique",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Le Diner",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/le-diner",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Lunacy",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/lunacy",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "The Blair Witch Project",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/the-blair-witch-project",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Born in Darkness",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/born-in-darkness",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Dungeon Nightmare",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/dungeon-nightmare",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "The Last of Us Mystic",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/the-last-of-us-mystic",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Buried Alive",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/buried-alive",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Five Nights at Benny's",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/five-nights-at-bennys",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "The Sculptor",
+      "url": "https://www.escapeall.gr/el/EscapeRoom/Details/the-sculptor",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Noah",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/noah",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Tarot",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/tarot",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "Dream On",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/dream-on",
+      "paused": false,
+      "rules": []
+    },
+    {
+      "name": "I See Dead People - Do You Have The 6th Sense",
+      "url": "https://www.escapeall.gr/en/EscapeRoom/Details/i-see-dead-people-do-you-have-the-6th-sense",
+      "paused": false,
+      "rules": []
+    }
+  ]
+}

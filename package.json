@@ -2,17 +2,21 @@
   "name": "escape-room-watcher",
   "version": "1.0.0",
   "description": "",
-  "main": "escape_availability.js",
+  "main": "src/cli.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/cli.js",
+    "dry": "node src/cli.js --dry-run",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "axios": "^1.10.0",
-    "p-limit": "^6.2.0",
-    "puppeteer": "^24.14.0"
+    "puppeteer": "^25.18.1"
   },
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "private": true
 }

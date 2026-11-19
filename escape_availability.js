@@ -1,16 +1,16 @@
+// How one room is checked on the site. This is the original, proven logic:
+// a fresh browser per room, the room page loaded once, the calendar days
+// clicked one by one. The only additions are (1) reading the HTTP status so a
+// refusal or a removed room is not mistaken for "no availability", and (2) not
+// discarding the slots of a day that was already selected before the click.
+// Everything around it (room list, pacing between rooms, cool-down, Telegram,
+// reports) lives in src/. Running this file starts the watcher: see src/cli.js.
 import puppeteer from "puppeteer";
-import fs from "fs/promises";
-import pLimit from "p-limit";
-import axios from "axios";
-
-// --- Configuration ---
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const ONLY_CHAT_ID = process.env.ONLY_CHAT_ID;
-const ROOMS_FILE = "./roomsToWatch.json";
+import { pathToFileURL } from "node:url";
+import { assertRoomPageServed, RoomGone, SiteRefusal } from "./src/site/refusal.js";
 
 // Politeness and Speed Configuration (Optimized)
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
-const MAX_CONCURRENT_ROOMS = Number(process.env.MAX_CONCURRENT_REQUESTS ?? 1); // Set concurrency to a slightly safe level (e.g., 2)
 const STAGGER_START_MS = Number(process.env.STAGGER_MS ?? 1500);
 const MIN_DELAY_BETWEEN_CHECKS_MS = Number(
   process.env.MIN_DELAY_BETWEEN_ROOMS_MS ?? 2500
@@ -40,30 +40,7 @@ async function enforceGlobalRateLimit() {
   _lastRequestAt = Date.now();
 }
 
-// --- Telegram & Utility Functions ---
-const TELEGRAM_API = TELEGRAM_TOKEN
-  ? `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`
-  : null;
-
-async function sendToTelegram(message) {
-  if (!TELEGRAM_API || !ONLY_CHAT_ID) {
-    console.log(
-      "(telegram) skipping send — TELEGRAM_TOKEN or ONLY_CHAT_ID missing"
-    );
-    return;
-  }
-  try {
-    await axios.post(TELEGRAM_API, {
-      chat_id: ONLY_CHAT_ID,
-      text: message,
-      parse_mode: "HTML",
-    });
-    console.log(`✅ Sent message to chat ID: ${ONLY_CHAT_ID}`);
-  } catch (err) {
-    console.error(`❌ Failed to send message to ${ONLY_CHAT_ID}:`, err.message);
-  }
-}
-
+// --- Utility Functions ---
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -88,6 +65,8 @@ async function withRetries(fn, attempts = 3, baseDelay = 1000) {
     try {
       return await fn();
     } catch (err) {
+      // A refusal or a removed room is an answer, not a glitch: never retry it.
+      if (err instanceof SiteRefusal || err instanceof RoomGone) throw err;
       if (attempt === attempts) throw err;
       const wait = baseDelay * Math.pow(2, attempt - 1) + randomInt(500);
       console.warn(
@@ -99,7 +78,6 @@ async function withRetries(fn, attempts = 3, baseDelay = 1000) {
 }
 
 // === Date format helpers ===
-const today = new Date();
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
   month: "2-digit",
@@ -112,16 +90,18 @@ const formatYear = (d) => d.getFullYear().toString();
 // === Puppeteer: Check availability for one room ===
 async function checkRoomAvailability(page, room) {
   console.log(`\n🔍 Checking room: ${room.name} (${room.url})`);
+  const today = new Date();
 
   await page.setUserAgent(generateUserAgent());
 
   await withRetries(
     async () => {
       await enforceGlobalRateLimit();
-      await page.goto(room.url, {
+      const response = await page.goto(room.url, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
+      await assertRoomPageServed(response); // throws SiteRefusal or RoomGone
     },
     3,
     2000
@@ -191,6 +171,12 @@ async function checkRoomAvailability(page, room) {
 
     await sleep(randomInt(300) + 50);
 
+    // On first load the page already shows today's slots, so clicking today
+    // changes nothing; that is not stale data.
+    const alreadySelected = await dayElement.evaluate((el) =>
+      el.classList.contains("selected-day")
+    );
+
     try {
       await enforceGlobalRateLimit();
       await withRetries(() => dayElement.click(), 2, 300);
@@ -215,7 +201,11 @@ async function checkRoomAvailability(page, room) {
       );
       timeListUpdated = true;
     } catch (e) {
-      console.log(`[STALE DATA] Time slot list for ${dateStr} did not change.`);
+      if (alreadySelected) {
+        timeListUpdated = true;
+      } else {
+        console.log(`[STALE DATA] Time slot list for ${dateStr} did not change.`);
+      }
     }
 
     // CRITICAL: Update the last known HTML for the next loop iteration.
@@ -280,10 +270,11 @@ async function checkRoomAvailability(page, room) {
 }
 
 // === Room Processing Function (Isolated Browser) ===
-const processRoom = async (room, limit) => {
+const processRoom = async (room) => {
   let browser;
   let page;
   let availability = {};
+  let removed = null;
 
   try {
     const stagger = STAGGER_START_MS + randomInt(RANDOM_EXTRA_DELAY_MS);
@@ -302,54 +293,27 @@ const processRoom = async (room, limit) => {
       1000
     );
   } catch (err) {
-    console.error(`❌ Fatal Error checking room ${room.name}:`, err.message);
-    availability = null;
+    if (err instanceof SiteRefusal) throw err; // the caller stops the whole run
+    if (err instanceof RoomGone) {
+      removed = err.message;
+    } else {
+      console.error(`❌ Fatal Error checking room ${room.name}:`, err.message);
+      availability = null;
+    }
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
 
   await sleep(MIN_DELAY_BETWEEN_CHECKS_MS + randomInt(RANDOM_EXTRA_DELAY_MS));
 
-  return { roomName: room.name, availability };
+  return { roomName: room.name, availability, removed };
 };
 
+export { processRoom };
+
 // --- Main Execution ---
-(async () => {
-  console.log("🚀 Starting concurrent availability check...");
-
-  try {
-    const roomsData = await fs.readFile(ROOMS_FILE, "utf8");
-    const rooms = JSON.parse(roomsData);
-
-    const limit = pLimit(MAX_CONCURRENT_ROOMS);
-
-    const results = await Promise.all(
-      rooms.map((room) => limit(() => processRoom(room, limit)))
-    );
-
-    // 3. Reporting
-    for (const { roomName, availability } of results) {
-      if (!availability || Object.keys(availability).length === 0) {
-        console.log(
-          `🛑 No availability found for room: ${roomName}, skipping message.`
-        );
-        continue;
-      }
-
-      let message = `🏠 <b>${roomName}</b>\n\nAvailable slots:\n`;
-      for (const [dateStr, slots] of Object.entries(availability)) {
-        message += `\n<b>${dateStr}</b>: ${slots.join(", ")}`;
-      }
-
-      // Re-enable Telegram integration when ready
-      await sendToTelegram(message);
-    }
-
-    console.log("✅ Concurrent availability check complete.");
-  } catch (error) {
-    console.error(
-      "A critical error occurred in the main script:",
-      error.message
-    );
-  }
-})();
+// `node escape_availability.js` keeps working: it starts the watcher.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const { main } = await import("./src/cli.js");
+  await main();
+}
