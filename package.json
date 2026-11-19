@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/cli.js",
     "dry": "node src/cli.js --dry-run",
+    "web": "node --env-file-if-exists=.env web/server.js",
     "test": "node --test \"test/**/*.test.js\""
   },
   "keywords": [],

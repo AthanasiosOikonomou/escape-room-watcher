@@ -1,0 +1,556 @@
+/*
+ * Escape room watchlist.
+ * One idea carries the page: the hours you would play are lit like marks
+ * under a blacklight, on a dark strip for each day of the week. Everything
+ * around the strips stays quiet.
+ */
+:root {
+  --paper: #eef1f3;
+  --surface: #ffffff;
+  --ink: #17212b;
+  --muted: #5a6875;
+  --line: #d3dae0;
+  --dark: #17212b; /* the unlit strip */
+  --lit: #6a4dfa; /* blacklight violet: the hours you would play */
+  --lit-soft: #ebe7ff;
+  --on-lit: #ffffff;
+  --danger: #b3261e;
+  --focus: #1f6feb;
+  --radius: 10px;
+  --font: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1a24;
+    --surface: #172533;
+    --ink: #e8eef3;
+    --muted: #9eadba;
+    --line: #2a3b4b;
+    --dark: #08111a;
+    --lit: #9a88ff;
+    --lit-soft: #2a2752;
+    --on-lit: #0f1a24;
+    --danger: #ff8f85;
+    --focus: #7fb2ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 1rem/1.5 var(--font);
+  padding: 0 1.25rem 7rem;
+}
+
+.masthead,
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+}
+
+.masthead {
+  padding: 3rem 0 1.75rem;
+}
+
+h1 {
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 1.125rem;
+  font-weight: 650;
+  margin: 0;
+}
+
+.lede {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--muted);
+  font-size: 1.0625rem;
+}
+
+.quiet,
+.hint {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.hint {
+  min-height: 1.4em;
+  margin-top: 0.4rem;
+}
+
+.hint[data-kind="error"] {
+  color: var(--danger);
+}
+
+/* ---- controls ---- */
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 0.45rem 0.95rem;
+  cursor: pointer;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button.primary {
+  background: var(--lit);
+  border-color: var(--lit);
+  color: var(--on-lit);
+}
+
+button.primary:hover {
+  filter: brightness(1.08);
+}
+
+button.plain {
+  border-color: transparent;
+  background: none;
+  padding-inline: 0.5rem;
+  color: var(--muted);
+}
+
+button.plain:hover {
+  color: var(--ink);
+}
+
+button.plain.danger:hover {
+  color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+input[type="url"],
+input[type="text"],
+input[type="date"],
+select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.55rem 0.7rem;
+  min-width: 0;
+}
+
+/* ---- add a room ---- */
+
+.add {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 4px);
+  padding: 1rem 1.1rem 0.6rem;
+}
+
+.add label {
+  display: block;
+  font-weight: 650;
+  margin-bottom: 0.4rem;
+}
+
+.add-row {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.add-row input {
+  flex: 1;
+  font-size: 1.0625rem;
+}
+
+/* ---- notices ---- */
+
+.notice {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--danger);
+  background: var(--surface);
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.notice p {
+  margin: 0;
+}
+
+/* ---- the list ---- */
+
+.list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 2.25rem 0 0.25rem;
+}
+
+.rooms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.room {
+  border-top: 1px solid var(--line);
+  padding: 1.15rem 0 1.25rem;
+}
+
+.room:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.room-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+input.room-name {
+  flex: 1 1 14rem;
+  font-size: 1.3125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-color: transparent;
+  background: transparent;
+  padding: 0.2rem 0.4rem;
+  margin-left: -0.4rem;
+}
+
+input.room-name:hover {
+  border-color: var(--line);
+}
+
+input.room-name:focus {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.room-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin-left: auto;
+}
+
+.room-link {
+  font-size: 0.875rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.room-link a {
+  color: inherit;
+}
+
+.tag {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+}
+
+.room.paused .week,
+.room.paused .room-name,
+.room.paused .when {
+  opacity: 0.45;
+}
+
+/* ---- the week: lit hours in a dark column for each day ---- */
+
+.week {
+  display: grid;
+  grid-template-columns: 2.5rem repeat(7, 1fr);
+  gap: 0.35rem;
+  align-items: end;
+  margin: 0.9rem 0 0.6rem;
+}
+
+.hours {
+  height: 4.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: right;
+  padding-right: 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.day {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.day.on {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.track {
+  position: relative;
+  height: 4.5rem;
+  border-radius: 8px;
+  background: var(--dark);
+  overflow: hidden;
+}
+
+.track i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 5px;
+  background: var(--lit);
+  box-shadow: 0 0 14px 2px var(--lit);
+  min-height: 0.4rem;
+}
+
+.when {
+  margin: 0.5rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- editing the times ---- */
+
+.editor {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.rule {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 2px);
+  padding: 0.9rem 1rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.rule-row > span:first-child {
+  flex: 0 0 4.5rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(2.4rem, 1fr));
+  gap: 0.3rem;
+  flex: 1 1 18rem;
+}
+
+.days button {
+  padding: 0.4rem 0;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.days button[aria-pressed="true"] {
+  background: var(--lit);
+  border-color: var(--lit);
+  color: var(--on-lit);
+}
+
+.shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: 5.25rem;
+  margin-top: -0.35rem;
+}
+
+.shortcuts button {
+  font-size: 0.8125rem;
+  padding: 0.15rem 0.6rem;
+  background: var(--lit-soft);
+  border-color: transparent;
+}
+
+.rule select,
+.rule input[type="date"] {
+  padding: 0.4rem 0.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rule-problem {
+  color: var(--danger);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.rule-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.editor-foot {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.empty {
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0;
+  color: var(--muted);
+  max-width: 32rem;
+}
+
+/* ---- save bar and toast ---- */
+
+.savebar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--dark);
+  color: #e8eef3;
+  padding: 0.8rem 1.25rem calc(0.8rem + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  flex-wrap: wrap;
+  box-shadow: 0 -8px 24px rgb(8 17 26 / 0.25);
+}
+
+.savebar p {
+  margin: 0;
+}
+
+.savebar-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.savebar button:not(.primary) {
+  background: transparent;
+  color: inherit;
+  border-color: #46586a;
+}
+
+.savebar .primary {
+  background: #8f7bff;
+  border-color: #8f7bff;
+  color: #0f1a24;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 5.5rem;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.6rem 0.75rem 0.6rem 1rem;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100vw - 2rem);
+  box-shadow: 0 6px 20px rgb(8 17 26 / 0.3);
+}
+
+.toast button {
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+  padding: 0.2rem 0.7rem;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 34rem) {
+  .add-row {
+    flex-direction: column;
+  }
+
+  .shortcuts {
+    margin-left: 0;
+  }
+
+  .rule-row > span:first-child {
+    flex-basis: 100%;
+  }
+
+  .room-actions {
+    margin-left: -0.5rem;
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .track i {
+    transition:
+      top 0.2s ease-out,
+      height 0.2s ease-out;
+  }
+
+  .savebar {
+    animation: rise 0.18s ease-out;
+  }
+
+  @keyframes rise {
+    from {
+      transform: translateY(100%);
+    }
+  }
+}

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex" />
+    <title>Escape room watchlist</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <h1>Rooms I want to play</h1>
+      <p class="lede">
+        Paste a room from escapeall.gr and say when you could go. Telegram tells you when a slot that fits is free.
+      </p>
+    </header>
+
+    <main>
+      <form id="add" class="add" novalidate>
+        <label for="add-url">Room link</label>
+        <div class="add-row">
+          <input
+            id="add-url"
+            type="url"
+            inputmode="url"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder="https://www.escapeall.gr/en/EscapeRoom/Details/…"
+            aria-describedby="add-hint"
+          />
+          <button type="submit" class="primary">Add room</button>
+        </div>
+        <p id="add-hint" class="hint" role="status"></p>
+      </form>
+
+      <div id="notice" class="notice" role="alert" hidden></div>
+
+      <section aria-labelledby="count">
+        <div class="list-head">
+          <h2 id="count">Loading the watchlist</h2>
+          <p id="source" class="quiet"></p>
+        </div>
+        <ol id="rooms" class="rooms"></ol>
+        <p id="empty" class="empty" hidden>
+          Nothing on the list yet. Find a room on escapeall.gr, copy its address and paste it above.
+        </p>
+      </section>
+    </main>
+
+    <div id="savebar" class="savebar" hidden>
+      <p id="save-text"></p>
+      <div class="savebar-actions">
+        <button type="button" id="discard">Discard changes</button>
+        <button type="button" id="save" class="primary">Save changes</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

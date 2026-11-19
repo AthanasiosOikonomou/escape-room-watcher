@@ -1,0 +1,34 @@
+# The watchlist page. Copy to /etc/systemd/system/ and see docs/deploy-watchlist-page.md.
+[Unit]
+Description=Escape room watchlist page
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Settings, including the GitHub token: root-owned, mode 600.
+EnvironmentFile=/etc/escape-room-watchlist.env
+WorkingDirectory=/opt/escape-room-watcher
+ExecStart=/usr/bin/node web/server.js
+Restart=on-failure
+RestartSec=10
+# Exit code 2 means the settings are wrong; restarting would not help.
+RestartPreventExitStatus=2
+
+# The service needs no files of its own, no privileges and no other devices.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
