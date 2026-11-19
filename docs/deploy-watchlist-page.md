@@ -4,7 +4,10 @@ This brief is self-contained. It is written for whoever sets the page up on the 
 
 ## What you are installing
 
-A small Node.js web service from the repository `AthanasiosOikonomou/escape-room-watcher` (folder `web/`). It serves one page where Sakis keeps his list of escape rooms and the days and hours he would play. When he saves, the service commits `watchlist.json` to the GitHub repository. A GitHub Actions workflow reads that file every 30 minutes and sends Telegram messages.
+A small Node.js web service from the repository `AthanasiosOikonomou/escape-room-watcher` (folder `web/`). It does two things:
+
+1. It serves one page where Sakis keeps his list of escape rooms and the days and hours he would play. When he saves, the service commits `watchlist.json` to the GitHub repository.
+2. It keeps the checks coming. The checking itself is a GitHub Actions workflow, but GitHub's own scheduler runs it late or not at all. Every five minutes the service looks at the workflow's last run and starts one when none began in the last 30 minutes.
 
 The service has no npm dependencies and needs no build step. It talks to `api.github.com` and to nothing else.
 
@@ -19,7 +22,7 @@ The service has no npm dependencies and needs no build step. It talks to `api.gi
 ## Before you start (Sakis does these)
 
 - Branch `rework` is merged into `main`, so `main` contains `watchlist.json` and the `web/` folder.
-- A fine-grained personal access token exists: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Repository access: **Only select repositories** → `escape-room-watcher`. Permissions: **Contents: Read and write**. Nothing else. Note the expiry date; the page stops saving when the token expires.
+- A fine-grained personal access token exists: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Repository access: **Only select repositories** → `escape-room-watcher`. Permissions: **Contents: Read and write** and **Actions: Read and write**. Nothing else. Note the expiry date; the page stops saving when the token expires.
 
 ## Steps
 
@@ -58,6 +61,7 @@ GITHUB_REPO=AthanasiosOikonomou/escape-room-watcher
 GITHUB_BRANCH=main
 HOST=127.0.0.1
 PORT=8787
+CHECK_EVERY_MINUTES=30
 ```
 
 Check the permissions without showing the content: `sudo stat -c '%a %U' /etc/escape-room-watchlist.env` must print `600 root`.
@@ -72,16 +76,17 @@ sudo systemctl enable --now escape-room-watchlist
 systemctl status escape-room-watchlist --no-pager
 ```
 
-The status must be `active (running)` and the log must show `Watchlist page on http://127.0.0.1:8787 (edits watchlist.json in AthanasiosOikonomou/escape-room-watcher, branch main)`.
+The status must be `active (running)` and the log must show `Watchlist page on http://127.0.0.1:8787 (edits watchlist.json in AthanasiosOikonomou/escape-room-watcher, branch main)` followed by `Keeping the checks going: …`. Within a minute a line `started a check (last one … ago)` appears if no check ran in the last 30 minutes.
 
 ### 5. Check it locally
 
 ```bash
 curl -s http://127.0.0.1:8787/api/health
 curl -s http://127.0.0.1:8787/api/watchlist | head -c 300
+curl -s http://127.0.0.1:8787/api/status
 ```
 
-The first prints `{"ok":true}`. The second prints JSON starting with `{"watchlist":{"version":1,"rooms":[` and listing Sakis's rooms.
+The first prints `{"ok":true}`. The second prints JSON starting with `{"watchlist":{"version":1,"rooms":[` and listing Sakis's rooms. The third prints `{"everyMinutes":30,"latest":{…}}` with the time and result of the last check.
 
 ### 6. Publish it to the tailnet
 
@@ -98,6 +103,7 @@ tailscale serve status
 2. Pause one room and press **Save changes**. A toast says "Saved."
 3. On GitHub, the repository shows a new commit "Watchlist: update <room>" by Sakis.
 4. Resume the room and save again.
+5. At the bottom of the page a line says when the last check started and how it went.
 
 ## If something goes wrong
 
@@ -105,6 +111,8 @@ tailscale serve status
 |---|---|---|
 | Service exits at once, log says `Configuration problem: …` | A setting is missing or malformed | Fix `/etc/escape-room-watchlist.env`, then `sudo systemctl restart escape-room-watchlist` |
 | `/api/watchlist` returns `GitHub refused the token … (HTTP 401 or 403)` | Token wrong, expired, or without Contents read and write on this repository | Sakis issues a new token; replace it in the env file; restart |
+| Log says `could not keep the checks going: GitHub refused the token … needs Actions read and write` | The token lacks the Actions permission | Sakis edits the token on GitHub and adds **Actions: Read and write**; no restart needed, it recovers at the next look |
+| Checks run twice as often as expected | Two copies of the service are running (for example one left on Sakis's Mac) | They do not pile up runs, but stop the extra copy anyway |
 | `/api/watchlist` returns `The watchlist on GitHub is not valid: …` | `watchlist.json` was edited by hand into a bad shape | Report the message to Sakis; do not edit the file from the server |
 | Page loads in the browser but says the host name is not allowed (HTTP 421) | Opened under a name that is neither `localhost` nor `*.ts.net` | Add that name to `ALLOWED_HOSTS` in the env file; restart |
 | Saving says the list was changed somewhere else | The file changed on GitHub after the page loaded it | Press **Load the latest** and redo the change |

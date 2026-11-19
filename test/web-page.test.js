@@ -28,8 +28,8 @@ before(async () => {
   page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
   page.on("dialog", (dialog) => dialog.accept()); // "leave with unsaved changes?" must never hang a test
   page.on("console", (message) => {
-    // The conflict test provokes one HTTP 409 on purpose; the browser logs it as a failed resource.
-    if (message.type() === "error" && !message.text().includes("status of 409")) problems.push(`console: ${message.text()}`);
+    // The tests provoke one HTTP 409 (conflict) and one 429 (check too soon) on purpose; the browser logs them as failed resources.
+    if (message.type() === "error" && !/status of (409|429)/.test(message.text())) problems.push(`console: ${message.text()}`);
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await waitForRooms();
@@ -257,6 +257,26 @@ test("a change made elsewhere is not overwritten: the page offers to load the la
   await page.waitForFunction(() => document.querySelectorAll(".room").length === 1);
   assert.deepEqual(await names(), ["Noah"]);
   assert.equal(await hidden("#savebar"), true);
+});
+
+test("the page shows when the rooms were last checked, and Check now starts a check", async () => {
+  github.state.runs = [
+    { created_at: new Date(Date.now() - 12 * 60_000).toISOString(), status: "completed", conclusion: "success", event: "schedule", html_url: `https://github.com/${REPO}/actions/runs/7` },
+  ];
+  await page.reload();
+  await waitForRooms();
+  await page.waitForFunction(() => !document.getElementById("status").hidden);
+  assert.equal(await text("#status-text"), "The last check started 12 minutes ago and went fine.");
+  assert.equal(await page.$eval("#status-text a", (a) => a.href), `https://github.com/${REPO}/actions/runs/7`);
+
+  await page.click("#check-now");
+  await page.waitForFunction(() => !document.getElementById("toast").hidden);
+  assert.equal(await text("#toast"), "Check started. Telegram hears about it in a few minutes.");
+  assert.deepEqual(github.state.dispatches, [{ ref: "main", inputs: { dry_run: "false", rooms: "" } }]);
+
+  await page.click("#check-now"); // a second click right away is refused politely
+  await page.waitForFunction(() => document.getElementById("toast").textContent.includes("a moment ago"));
+  assert.equal(github.state.dispatches.length, 1);
 });
 
 test("room names are shown as text, never run as markup", async () => {

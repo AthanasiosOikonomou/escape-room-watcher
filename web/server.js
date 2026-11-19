@@ -6,8 +6,11 @@
  *
  *   node --env-file=.env web/server.js
  *
+ * It also keeps the checks coming: when no run of the workflow began within
+ * CHECK_EVERY_MINUTES, it starts one (web/scheduler.js).
+ *
  * Settings: GITHUB_TOKEN, GITHUB_REPO (required), GITHUB_BRANCH, WATCHLIST_PATH,
- * HOST, PORT, ALLOWED_HOSTS. See web/config.js.
+ * WORKFLOW_FILE, CHECK_EVERY_MINUTES, HOST, PORT, ALLOWED_HOSTS. See web/config.js.
  */
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -18,9 +21,12 @@ import { ConfigError } from "../src/config.js";
 import { validateWatchlist } from "../src/watchlist.js";
 import { loadWebConfig } from "./config.js";
 import { createGitHub, describeChange, GitHubError } from "./github.js";
+import { createScheduler, minutesSince } from "./scheduler.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY_BYTES = 64 * 1024;
+// "Check now" is refused while a check from the last few minutes is still fresh.
+const CHECK_NOW_MIN_GAP_MINUTES = 5;
 
 // The only files the page is made of. Nothing else on disk can be requested.
 const STATIC = {
@@ -95,16 +101,35 @@ export function createApp(config, { github = createGitHub(config), log = console
     send(res, 200, { watchlist, sha, repo: config.repo, branch: config.branch });
   }
 
-  async function putWatchlist(req, res) {
-    // Only this page may change the watchlist: same origin, JSON body.
-    const origin = req.headers.origin;
-    let sameOrigin = false;
+  /** Only this page may change things: the request must come from the same origin. */
+  function fromThisPage(req) {
     try {
-      sameOrigin = typeof origin === "string" && new URL(origin).host === req.headers.host;
+      return typeof req.headers.origin === "string" && new URL(req.headers.origin).host === req.headers.host;
     } catch {
-      sameOrigin = false;
+      return false;
     }
-    if (!sameOrigin) return send(res, 403, { error: "This request did not come from the watchlist page." });
+  }
+
+  async function getStatus(res) {
+    const latest = await github.latestRun();
+    send(res, 200, { everyMinutes: config.checkEveryMinutes, latest });
+  }
+
+  async function postCheck(req, res) {
+    if (!fromThisPage(req)) return send(res, 403, { error: "This request did not come from the watchlist page." });
+    req.resume();
+    const latest = await github.latestRun();
+    const age = latest ? minutesSince(latest.createdAt) : Infinity;
+    if (age < CHECK_NOW_MIN_GAP_MINUTES) {
+      return send(res, 429, { error: "A check started a moment ago. Give it a few minutes.", latest });
+    }
+    await github.startRun();
+    log("started a check on request");
+    send(res, 202, { started: true });
+  }
+
+  async function putWatchlist(req, res) {
+    if (!fromThisPage(req)) return send(res, 403, { error: "This request did not come from the watchlist page." });
     if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
       return send(res, 415, { error: "Send JSON." });
     }
@@ -154,6 +179,14 @@ export function createApp(config, { github = createGitHub(config), log = console
         if (req.method === "PUT") return await putWatchlist(req, res);
         return send(res, 405, { error: "Method not allowed." }, { allow: "GET, PUT" });
       }
+      if (url.pathname === "/api/status") {
+        if (req.method === "GET") return await getStatus(res);
+        return send(res, 405, { error: "Method not allowed." }, { allow: "GET" });
+      }
+      if (url.pathname === "/api/check") {
+        if (req.method === "POST") return await postCheck(req, res);
+        return send(res, 405, { error: "Method not allowed." }, { allow: "POST" });
+      }
       if (url.pathname === "/api/health") {
         return send(res, 200, { ok: true });
       }
@@ -181,13 +214,22 @@ export function createApp(config, { github = createGitHub(config), log = console
   };
 }
 
-export function startServer(config, options) {
-  const server = http.createServer(createApp(config, options));
+export function startServer(config, options = {}) {
+  const github = options.github ?? createGitHub(config);
+  const log = options.log ?? console.log;
+  const server = http.createServer(createApp(config, { github, log }));
   server.requestTimeout = 30_000;
   server.headersTimeout = 15_000;
+
+  const scheduler = createScheduler({ github, everyMinutes: config.checkEveryMinutes ?? 0, log });
+  server.on("close", () => scheduler.stop());
+
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(config.port, config.host, () => resolve(server));
+    server.listen(config.port, config.host, () => {
+      if (options.schedule !== false) scheduler.start();
+      resolve(server);
+    });
   });
 }
 
@@ -197,6 +239,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const server = await startServer(config);
     const { port } = server.address();
     console.log(`Watchlist page on http://${config.host}:${port} (edits ${config.watchlistPath} in ${config.repo}, branch ${config.branch})`);
+    console.log(
+      config.checkEveryMinutes > 0
+        ? `Keeping the checks going: a run of ${config.workflowFile} is started when none began in the last ${config.checkEveryMinutes} minutes.`
+        : "Not starting checks from here (CHECK_EVERY_MINUTES=0); GitHub's own schedule is on its own.",
+    );
     for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => server.close(() => process.exit(0)));
   } catch (error) {
     console.error(error instanceof ConfigError ? `Configuration problem: ${error.message}` : error);

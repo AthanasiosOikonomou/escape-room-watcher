@@ -1,6 +1,6 @@
 /**
- * A local stand-in for the two GitHub endpoints the watchlist page uses:
- * the repository itself and the contents of one file.
+ * A local stand-in for the GitHub endpoints the watchlist page uses: the
+ * repository, the contents of one file, and the runs of one workflow.
  */
 import http from "node:http";
 import crypto from "node:crypto";
@@ -18,7 +18,11 @@ export async function startMockGitHub({ repo, path, branch = "main", initial = n
     commits: [],
     requests: [],
     failNextWrite: null,
+    runs: [], // newest first: { created_at, status, conclusion, event, html_url }
+    dispatches: [],
+    actionsAllowed: true, // false: the token has no Actions permission
   };
+  const workflow = `/repos/${repo}/actions/workflows/main.yml`;
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://github.mock");
@@ -32,6 +36,26 @@ export async function startMockGitHub({ repo, path, branch = "main", initial = n
       state.requests.push({ method: req.method, path: url.pathname, authorization: req.headers.authorization });
       if (req.headers.authorization !== `Bearer ${TEST_TOKEN}`) return reply(401, { message: "Bad credentials" });
       if (url.pathname === `/repos/${repo}`) return reply(200, { full_name: repo });
+      if (url.pathname.startsWith(workflow) && !state.actionsAllowed) {
+        return reply(403, { message: "Resource not accessible by personal access token" });
+      }
+      if (url.pathname === `${workflow}/runs` && req.method === "GET") {
+        if (url.searchParams.get("branch") !== branch) return reply(200, { workflow_runs: [] });
+        return reply(200, { workflow_runs: state.runs.slice(0, Number(url.searchParams.get("per_page") ?? 30)) });
+      }
+      if (url.pathname === `${workflow}/dispatches` && req.method === "POST") {
+        const body = JSON.parse(raw);
+        state.dispatches.push(body);
+        state.runs.unshift({
+          created_at: new Date().toISOString(),
+          status: "queued",
+          conclusion: null,
+          event: "workflow_dispatch",
+          html_url: `https://github.com/${repo}/actions/runs/${1000 + state.dispatches.length}`,
+        });
+        res.writeHead(204);
+        return res.end();
+      }
       if (url.pathname !== `/repos/${repo}/contents/${path}`) return reply(404, { message: "Not Found" });
 
       if (req.method === "GET") {

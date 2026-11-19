@@ -8,6 +8,7 @@ const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const BRANCH = /^[A-Za-z0-9._\/-]{1,100}$/;
 const FILE_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.json$/;
 const HOSTNAME = /^[A-Za-z0-9.-]{1,253}$/;
+const WORKFLOW_FILE = /^[A-Za-z0-9._-]{1,100}\.ya?ml$/;
 
 export function loadWebConfig(env = process.env) {
   const token = env.GITHUB_TOKEN || "";
@@ -26,6 +27,15 @@ export function loadWebConfig(env = process.env) {
 
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ConfigError("PORT must be a port number");
+
+  const workflowFile = env.WORKFLOW_FILE || "main.yml";
+  if (!WORKFLOW_FILE.test(workflowFile)) throw new ConfigError("WORKFLOW_FILE must be the workflow's file name, like main.yml");
+
+  // 0 switches the timer off; otherwise no faster than every 15 minutes.
+  const checkEveryMinutes = Number(env.CHECK_EVERY_MINUTES ?? 30);
+  if (!Number.isInteger(checkEveryMinutes) || (checkEveryMinutes !== 0 && (checkEveryMinutes < 15 || checkEveryMinutes > 720))) {
+    throw new ConfigError("CHECK_EVERY_MINUTES must be 0 (off) or a whole number from 15 to 720");
+  }
 
   const allowedHosts = (env.ALLOWED_HOSTS || "")
     .split(",")
@@ -50,6 +60,8 @@ export function loadWebConfig(env = process.env) {
     repo,
     branch,
     watchlistPath,
+    workflowFile,
+    checkEveryMinutes,
     // Loopback by default: publish it to your tailnet with `tailscale serve`, not by opening the port.
     host: env.HOST || "127.0.0.1",
     port,

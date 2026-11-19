@@ -518,7 +518,64 @@ function discard() {
   render();
 }
 
+// ---------- when the rooms were last checked ----------
+
+function ago(isoTime) {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(isoTime).getTime()) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} ${hours === 1 ? "hour" : "hours"} ago` : `${Math.round(hours / 24)} days ago`;
+}
+
+function outcome(run) {
+  if (run.status !== "completed") return "is still running";
+  if (run.conclusion === "success") return "went fine";
+  if (run.conclusion === "cancelled") return "was cancelled";
+  return "failed";
+}
+
+async function loadStatus() {
+  const box = $("status");
+  const text = $("status-text");
+  try {
+    const response = await fetch("/api/status");
+    const data = await response.json().catch(() => ({}));
+    box.hidden = false;
+    if (!response.ok) {
+      text.textContent = data.error ?? "The last check cannot be shown right now.";
+      $("check-now").hidden = true;
+      return;
+    }
+    $("check-now").hidden = false;
+    if (!data.latest) {
+      text.textContent = "No check has run yet.";
+      return;
+    }
+    const sentence = `The last check started ${ago(data.latest.createdAt)} and ${outcome(data.latest)}.`;
+    text.replaceChildren(data.latest.url ? el("a", { href: data.latest.url, target: "_blank", rel: "noopener noreferrer", text: sentence }) : sentence);
+  } catch {
+    box.hidden = true;
+  }
+}
+
+async function checkNow() {
+  const button = $("check-now");
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/check", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    toast(response.ok ? "Check started. Telegram hears about it in a few minutes." : (data.error ?? "The check could not be started."));
+    setTimeout(loadStatus, 4000);
+  } catch {
+    toast("The watchlist server is not answering.");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 $("add").addEventListener("submit", addRoom);
+$("check-now").addEventListener("click", checkNow);
 $("add-url").addEventListener("input", () => setHint(""));
 $("find-input").addEventListener("input", (event) => {
   query = event.target.value;
@@ -550,3 +607,5 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 load();
+loadStatus();
+setInterval(loadStatus, 60_000);

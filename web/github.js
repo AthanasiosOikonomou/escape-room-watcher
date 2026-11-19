@@ -1,5 +1,6 @@
 /**
- * The one file this service reads and writes on GitHub: the watchlist.
+ * What this service does on GitHub: read and write one file (the watchlist),
+ * look at the latest run of the watcher's workflow, and start a run.
  * The token never leaves this module and is never logged; errors carry the
  * HTTP status and GitHub's own message only.
  */
@@ -13,7 +14,8 @@ export class GitHubError extends Error {
   }
 }
 
-export function createGitHub({ token, repo, branch, watchlistPath, apiBase }) {
+export function createGitHub({ token, repo, branch, watchlistPath, apiBase, workflowFile = "main.yml" }) {
+  const workflowUrl = `${apiBase}/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}`;
   const fileUrl = `${apiBase}/repos/${repo}/contents/${watchlistPath.split("/").map(encodeURIComponent).join("/")}`;
   const headers = {
     authorization: `Bearer ${token}`,
@@ -33,10 +35,10 @@ export function createGitHub({ token, repo, branch, watchlistPath, apiBase }) {
     return { status: response.status, body };
   }
 
-  function fail(status, body, doing) {
+  function fail(status, body, doing, needs = "Contents read and write") {
     const said = typeof body?.message === "string" ? `: ${body.message.slice(0, 200)}` : "";
     if (status === 401 || status === 403) {
-      return new GitHubError("auth", `GitHub refused the token while ${doing} (HTTP ${status}${said}). It needs Contents read and write on ${repo}.`);
+      return new GitHubError("auth", `GitHub refused the token while ${doing} (HTTP ${status}${said}). It needs ${needs} on ${repo}.`);
     }
     if (status === 409 || status === 422) return new GitHubError("conflict", `the watchlist changed on GitHub while ${doing}`);
     if (status === 404) return new GitHubError("not-found", `GitHub has no ${repo} (or the token cannot see it) while ${doing}`);
@@ -81,6 +83,36 @@ export function createGitHub({ token, repo, branch, watchlistPath, apiBase }) {
         throw fail(status, body, "saving the watchlist");
       }
       return { sha: body.content.sha };
+    },
+
+    /**
+     * The most recent run of the watcher's workflow on the watched branch.
+     * @returns {Promise<{ createdAt: string, status: string, conclusion: string|null, event: string, url: string }|null>}
+     */
+    async latestRun() {
+      const { status, body } = await call(`${workflowUrl}/runs?branch=${encodeURIComponent(branch)}&per_page=1`);
+      if (status !== 200 || !Array.isArray(body?.workflow_runs)) {
+        throw fail(status, body, "looking at the last check", "Actions read and write");
+      }
+      const run = body.workflow_runs[0];
+      if (!run) return null;
+      return {
+        createdAt: String(run.created_at),
+        status: String(run.status),
+        conclusion: run.conclusion ?? null,
+        event: String(run.event),
+        url: typeof run.html_url === "string" && run.html_url.startsWith("https://github.com/") ? run.html_url : null,
+      };
+    },
+
+    /** Starts a run of the watcher's workflow on the watched branch. */
+    async startRun() {
+      const { status, body } = await call(`${workflowUrl}/dispatches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ref: branch, inputs: { dry_run: "false", rooms: "" } }),
+      });
+      if (status !== 204 && status !== 200) throw fail(status, body, "starting a check", "Actions read and write");
     },
   };
 }
