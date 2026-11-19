@@ -49,7 +49,7 @@ export function calendarPayload(today = athensDate()) {
   return days;
 }
 
-function roomPage({ withBooking }) {
+function roomPage({ withBooking, clickable = true }) {
   // A room without online booking still renders the calendar template, but
   // with no data attributes and no script call: the page never asks for a calendar.
   if (!withBooking) {
@@ -64,7 +64,8 @@ function roomPage({ withBooking }) {
       document.addEventListener("DOMContentLoaded", async () => {
         const res = await fetch("/api/Reservation?from=2026-1-1&until=2026-2-11&ServiceId=${SERVICE_ID}&bookedBy=1&language=en&noGifts=false&queueToken=");
         if (!res.ok) return;
-        const days = await res.json();
+        const raw = await res.json();
+        const days = Array.isArray(raw) ? raw : raw.days;
         const grid = document.getElementById("grid");
         const list = document.querySelector(".time-selection");
         const show = (cell, day) => {
@@ -80,7 +81,7 @@ function roomPage({ withBooking }) {
           const state = day.PastDate ? "past-date" : day.HasAvailable ? "available" : "not-available";
           cell.className = "dateCell " + state;
           cell.textContent = day.Day;
-          cell.style.cssText = "display:inline-block;width:40px;height:40px";
+          if (${clickable}) cell.style.cssText = "display:inline-block;width:40px;height:40px";
           Object.assign(cell.dataset, { day: day.Day, month: day.Month, year: day.Year });
           cell.addEventListener("click", () => show(cell, day));
           grid.append(cell);
@@ -110,7 +111,9 @@ export async function startMockSite({ today = athensDate() } = {}) {
         return res.end("<html><title>Just a moment...</title></html>");
       }
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      return res.end(JSON.stringify(calendarPayload(today)));
+      // "wrapped": a calendar answer in a shape the watcher does not know.
+      const payload = calendarPayload(today);
+      return res.end(JSON.stringify(referer.includes("/wrapped") ? { days: payload } : payload));
     }
 
     const slug = url.pathname.match(/^\/en\/EscapeRoom\/Details\/([\w-]+)$/)?.[1];
@@ -132,7 +135,8 @@ export async function startMockSite({ today = athensDate() } = {}) {
     }
     if (slug) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      return res.end(roomPage({ withBooking: slug !== "coming-soon" }));
+      // "unclickable": day cells with no size, which a click cannot hit.
+      return res.end(roomPage({ withBooking: slug !== "coming-soon", clickable: slug !== "unclickable" }));
     }
     if (url.pathname === "/en") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });

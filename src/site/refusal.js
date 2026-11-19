@@ -24,36 +24,45 @@ export class RoomGone extends Error {
 }
 
 /**
+ * @param {import("puppeteer").HTTPResponse} response
+ * @returns {Promise<object|null>} what the refusal said, or null when the response is not a refusal
+ */
+export async function refusalOf(response) {
+  const status = response.status();
+  const headers = response.headers();
+  if (!REFUSAL_STATUSES.has(status) && !headers["cf-mitigated"]) return null;
+
+  const seconds = Number(headers["retry-after"]);
+  let title = null;
+  let errorCode = null;
+  try {
+    const body = await response.text();
+    title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(body)?.[1].trim() ?? null;
+    // Cloudflare block pages can carry a four-digit code, e.g. 1015 for rate limiting.
+    errorCode = /(?:error code:?\s*|cf-error-code[^>]*>\s*|Error\s+)(1\d{3})\b/i.exec(body)?.[1] ?? null;
+  } catch {
+    // The body of a refused request is not always readable.
+  }
+  return {
+    status,
+    title,
+    errorCode,
+    retryAfterSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
+    server: headers.server ?? null,
+    cfMitigated: headers["cf-mitigated"] ?? null,
+  };
+}
+
+/**
  * @param {import("puppeteer").HTTPResponse|null} response the response of page.goto
  * @throws {SiteRefusal|RoomGone}
  */
 export async function assertRoomPageServed(response) {
   if (!response) return;
+  const refusal = await refusalOf(response);
+  if (refusal) throw new SiteRefusal(refusal);
+
   const status = response.status();
-  const headers = response.headers();
-
-  if (REFUSAL_STATUSES.has(status) || headers["cf-mitigated"]) {
-    const seconds = Number(headers["retry-after"]);
-    let title = null;
-    let errorCode = null;
-    try {
-      const body = await response.text();
-      title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(body)?.[1].trim() ?? null;
-      // Cloudflare block pages can carry a four-digit code, e.g. 1015 for rate limiting.
-      errorCode = /(?:error code:?\s*|cf-error-code[^>]*>\s*|Error\s+)(1\d{3})\b/i.exec(body)?.[1] ?? null;
-    } catch {
-      // The body of a refused navigation is not always readable.
-    }
-    throw new SiteRefusal({
-      status,
-      title,
-      errorCode,
-      retryAfterSeconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
-      server: headers.server ?? null,
-      cfMitigated: headers["cf-mitigated"] ?? null,
-    });
-  }
-
   let path = "";
   try {
     path = new URL(response.url()).pathname;

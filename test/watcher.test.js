@@ -123,6 +123,36 @@ test("the original room check, run against the mock site: free slots, nothing fr
   for (const userAgent of site.userAgents) assert.match(userAgent, /Chrome\/12[0-2]\.0\.0\.0|Firefox\/123|Version\/17\.3/);
 });
 
+const antiqueSlots = (result) => result.days.map((day) => [day.date, day.slots.map((slot) => slot.time)]);
+const EXPECTED_ANTIQUE = [
+  [TODAY, ["19:00", "21:15"]],
+  [addDays(TODAY, 2), ["00:30"]],
+];
+
+test("the calendar the page loaded is read directly: no clicks are needed", async () => {
+  site.requests.length = 0;
+  // On this page no day can be clicked, so only the loaded calendar can give the answer.
+  const { report } = await watch([room("Antique", "unclickable")]);
+  assert.equal(report.results[0].outcome, Outcome.OK);
+  assert.deepEqual(antiqueSlots(report.results[0]), EXPECTED_ANTIQUE);
+  assert.deepEqual(pageCalls(), ["GET /en/EscapeRoom/Details/unclickable", "GET /api/Reservation"]);
+});
+
+test("an unknown calendar format falls back to the original click-through, with the same result", async () => {
+  site.requests.length = 0;
+  const { report } = await watch([room("Antique", "wrapped")]);
+  assert.equal(report.results[0].outcome, Outcome.OK);
+  assert.deepEqual(antiqueSlots(report.results[0]), EXPECTED_ANTIQUE);
+  assert.deepEqual(pageCalls(), ["GET /en/EscapeRoom/Details/wrapped", "GET /api/Reservation"]);
+});
+
+test("a refused calendar request stops the run like a refused page", async () => {
+  const { report } = await watch([room("Antique", "api-blocked"), room("Scream", "coming-soon")]);
+  assert.equal(report.results[0].outcome, Outcome.BLOCKED);
+  assert.equal(report.results[0].refusal.status, 403);
+  assert.deepEqual(report.skipped, ["Scream"]);
+});
+
 test("a refusal stops the run at once: no retry, later rooms untouched, one alert", async () => {
   bot.received.length = 0;
   site.requests.length = 0;

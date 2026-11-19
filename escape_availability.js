@@ -1,13 +1,19 @@
-// How one room is checked on the site. This is the original, proven logic:
-// a fresh browser per room, the room page loaded once, the calendar days
-// clicked one by one. The only additions are (1) reading the HTTP status so a
-// refusal or a removed room is not mistaken for "no availability", and (2) not
-// discarding the slots of a day that was already selected before the click.
+// How one room is checked on the site. What the site sees is the original,
+// proven behaviour: a fresh browser per room, the room page loaded once.
+// Additions that change nothing the site sees:
+//  (1) the HTTP status is read, so a refusal or a removed room is not mistaken
+//      for "no availability";
+//  (2) the calendar the page fetches for itself is read directly; clicking
+//      through the days (the original way) stays as the fallback. On
+//      2026-11-19 the click-through lost 3 of 12 days to "stale data";
+//  (3) in the fallback, a day already selected before the click is not
+//      discarded as stale.
 // Everything around it (room list, pacing between rooms, cool-down, Telegram,
 // reports) lives in src/. Running this file starts the watcher: see src/cli.js.
 import puppeteer from "puppeteer";
 import { pathToFileURL } from "node:url";
-import { assertRoomPageServed, RoomGone, SiteRefusal } from "./src/site/refusal.js";
+import { assertRoomPageServed, refusalOf, RoomGone, SiteRefusal } from "./src/site/refusal.js";
+import { availabilityFromCalendar, watchCalendar, within } from "./src/site/calendar.js";
 
 // Politeness and Speed Configuration (Optimized)
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 14);
@@ -25,6 +31,8 @@ const GLOBAL_MIN_REQUEST_INTERVAL_MS = Number(
 
 // CRITICAL: Fast fail if the calendar doesn't load quickly
 const CALENDAR_WAIT_TIMEOUT_MS = 2500;
+// Once the page has asked for its calendar, how long to wait for the answer.
+const CALENDAR_ANSWER_TIMEOUT_MS = 15000;
 
 // --- Global Rate Limiter (State and Function) ---
 let _lastRequestAt = 0;
@@ -87,12 +95,59 @@ const formatDay = (d) => d.getDate().toString();
 const formatMonth = (d) => (d.getMonth() + 1).toString();
 const formatYear = (d) => d.getFullYear().toString();
 
+// === The calendar the page already loaded ===
+// Returns the same { "DD/MM/YYYY": ["19:00", …] } as the click-through, or null
+// when it cannot be read (then the click-through below is used).
+async function readLoadedCalendar(calendar, today, room) {
+  try {
+    if (!(await within(calendar.requested, CALENDAR_WAIT_TIMEOUT_MS))) return null;
+    const response = await within(calendar.response, CALENDAR_ANSWER_TIMEOUT_MS);
+    if (!response) return null;
+
+    const refusal = await refusalOf(response);
+    if (refusal) throw new SiteRefusal(refusal);
+    if (response.status() !== 200) return null;
+
+    const wantedDays = [];
+    for (let offset = 0; offset <= DAYS_AHEAD; offset++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + offset);
+      const [day, month, year] = dateFormatter
+        .formatToParts(date)
+        .filter((part) => part.type !== "literal")
+        .map((part) => part.value);
+      wantedDays.push({
+        day: date.getDate(),
+        month: date.getMonth() + 1,
+        year: date.getFullYear(),
+        label: `${day}/${month}/${year}`,
+      });
+    }
+
+    const availability = availabilityFromCalendar(await response.json(), wantedDays);
+    if (!availability) return null;
+    for (const [dateStr, slots] of Object.entries(availability)) {
+      console.log(`✅ ${room.name} - ${dateStr}: Slots → ${slots.join(", ")}`);
+    }
+    return availability;
+  } catch (err) {
+    if (err instanceof SiteRefusal) throw err;
+    console.warn(`Calendar answer not usable for ${room.name} (${err.message}), clicking through instead.`);
+    return null;
+  } finally {
+    calendar.stop();
+  }
+}
+
 // === Puppeteer: Check availability for one room ===
 async function checkRoomAvailability(page, room) {
   console.log(`\n🔍 Checking room: ${room.name} (${room.url})`);
   const today = new Date();
 
   await page.setUserAgent(generateUserAgent());
+
+  // Listen for the calendar the page will fetch for itself. This sends nothing.
+  const calendar = watchCalendar(page);
 
   await withRetries(
     async () => {
@@ -120,6 +175,10 @@ async function checkRoomAvailability(page, room) {
     return {};
   }
 
+  const loaded = await readLoadedCalendar(calendar, today, room);
+  if (loaded) return loaded;
+
+  // --- Fallback: the original click-through ---
   const roomAvailability = {};
   const timeSelectionSelector = ".time-selection";
 
