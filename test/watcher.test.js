@@ -98,7 +98,7 @@ test("the original room check, run against the mock site: free slots, nothing fr
   );
   assert.deepEqual(report.results[1].days, []);
   assert.match(report.results[2].detail, /\/en \(HTTP 200\)$/);
-  assert.deepEqual(report.summary, { rooms: 3, withFreeSlots: 1, nothingFree: 1, removed: 1, errors: 0, blocked: 0 });
+  assert.deepEqual(report.summary, { rooms: 3, withFreeSlots: 1, nothingFree: 1, removed: 1, errors: 0, blocked: 0, undelivered: 0 });
   assert.equal(exitCodeFor(report), 0);
 
   // One message, for the one room with free slots.
@@ -272,7 +272,7 @@ test("a room's rules decide which free slots are reported", async () => {
   assert.deepEqual(report.results[0].days, [{ date: "2026-11-20", slots: [{ time: "20:45" }] }]);
   assert.equal(report.results[0].freeSlotsBeforeRules, 5);
   assert.deepEqual(report.results[1].days, []);
-  assert.deepEqual(report.summary, { rooms: 2, withFreeSlots: 1, nothingFree: 1, removed: 0, errors: 0, blocked: 0 });
+  assert.deepEqual(report.summary, { rooms: 2, withFreeSlots: 1, nothingFree: 1, removed: 0, errors: 0, blocked: 0, undelivered: 0 });
   assert.equal(bot.received.length, 1);
   assert.ok(bot.received[0].body.text.includes("<i>Fri, Sat, Sun 19:00–22:00</i>"));
   assert.ok(bot.received[0].body.text.endsWith("<b>Fri 20/11/2026</b>: 20:45"));
@@ -329,6 +329,31 @@ test("a message that could not be sent is tried again on the next run", async ()
   const checkRoom = async () => ({ availability: { "20/11/2026": ["20:45"] }, removed: null });
   await runWatch({ rooms: [room("Antique", "antique")], config, telegram: failing, memory, log: () => {}, sleep: noSleep, checkRoom });
   assert.deepEqual(memory, {});
+});
+
+test("on a real run, a message Telegram refuses makes the run fail and is sent again next time", async () => {
+  const lines = [];
+  const memory = {};
+  const refused = createTelegram({ token: TOKEN, chatId: "42", apiBase: "http://127.0.0.1:9", log: (line) => lines.push(line) });
+  const checkRoom = async () => ({ availability: { "20/11/2026": ["20:45"] }, removed: null });
+  const rooms = [room("Antique", "antique"), room("Noah", "noah")];
+
+  const failed = await runWatch({ rooms, config, telegram: refused, memory, log: () => {}, sleep: noSleep, checkRoom, expectDelivery: true });
+  assert.equal(failed.summary.undelivered, 2);
+  assert.equal(failed.summary.withFreeSlots, 2);
+  assert.equal(exitCodeFor(failed), 1);
+  assert.deepEqual(memory, {}); // nothing is remembered as sent
+
+  bot.received.length = 0;
+  const { report } = await watch(rooms, { checkRoom, memory, expectDelivery: true }); // Telegram works again
+  assert.equal(report.summary.undelivered, 0);
+  assert.equal(exitCodeFor(report), 0);
+  assert.equal(bot.received.length, 2);
+
+  // A dry run sends nothing by design and is not a failure.
+  const dry = await runWatch({ rooms, config, telegram: { enabled: false, send: async () => false }, log: () => {}, sleep: noSleep, checkRoom });
+  assert.equal(dry.summary.undelivered, 0);
+  assert.equal(exitCodeFor(dry), 0);
 });
 
 test("without Telegram settings nothing is sent and the run still succeeds", async () => {

@@ -53,11 +53,18 @@ function refusalAlert(result, checked, total, skipped) {
  * @param {(line: string) => void} [run.log]
  * @param {(ms: number) => Promise<void>} [run.sleep]
  * @param {(room: { name: string, url: string }) => Promise<{ availability: object|null, removed: string|null }>} [run.checkRoom]
+ * @param {boolean} [run.expectDelivery] true on a real run: a message that cannot be sent makes the run fail
  */
-export async function runWatch({ rooms, config, telegram, memory = {}, log = console.log, sleep = realSleep, checkRoom = processRoom }) {
+export async function runWatch({ rooms, config, telegram, memory = {}, log = console.log, sleep = realSleep, checkRoom = processRoom, expectDelivery = false }) {
   const startedAt = new Date();
   const results = [];
   let blocked = null;
+  let undelivered = 0;
+  const deliver = async (text) => {
+    const sent = await telegram.send(text);
+    if (!sent && expectDelivery) undelivered += 1;
+    return sent;
+  };
 
   for (const [index, room] of rooms.entries()) {
     if (index > 0) {
@@ -112,13 +119,13 @@ export async function runWatch({ rooms, config, telegram, memory = {}, log = con
 
       if (slotCount > 0 && (config.notifyMode === "always" || signature !== lastSent)) {
         log(`✅ ${room.name}: ${slotCount} matching free slot(s) on ${result.days.length} day(s)${aside}`);
-        result.notified = await telegram.send(formatRoomMessage(room, result.days));
+        result.notified = await deliver(formatRoomMessage(room, result.days));
         if (result.notified) memory[room.url] = signature;
       } else if (slotCount > 0) {
         log(`✅ ${room.name}: ${slotCount} matching free slot(s), same as the last message, not sent again${aside}`);
       } else if (lastSent && config.notifyMode === "on-change") {
         log(`·  ${room.name}: the slots from the last message are gone${aside}`);
-        result.notified = await telegram.send(formatNothingLeftMessage(room));
+        result.notified = await deliver(formatNothingLeftMessage(room));
         if (result.notified) memory[room.url] = "";
       } else {
         log(`·  ${room.name}: nothing free that fits${aside}`);
@@ -138,7 +145,7 @@ export async function runWatch({ rooms, config, telegram, memory = {}, log = con
 
   const skipped = rooms.slice(results.length).map((room) => room.name);
   if (blocked) {
-    await telegram.send(refusalAlert(results.at(-1), results.length - 1, rooms.length, skipped.length));
+    await deliver(refusalAlert(results.at(-1), results.length - 1, rooms.length, skipped.length));
   }
 
   const count = (outcome) => results.filter((r) => r.outcome === outcome).length;
@@ -156,13 +163,14 @@ export async function runWatch({ rooms, config, telegram, memory = {}, log = con
       removed: count(Outcome.REMOVED),
       errors: count(Outcome.ERROR),
       blocked: count(Outcome.BLOCKED),
+      undelivered,
     },
     results,
   };
 }
 
-/** 0 = clean run, 1 = at least one room failed, 2 = the site refused us. */
+/** 0 = clean run, 1 = a room failed or a message could not be delivered, 2 = the site refused us. */
 export function exitCodeFor(report) {
   if (report.blocked) return 2;
-  return report.summary.errors > 0 ? 1 : 0;
+  return report.summary.errors > 0 || report.summary.undelivered > 0 ? 1 : 0;
 }

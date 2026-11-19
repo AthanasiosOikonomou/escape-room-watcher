@@ -13,7 +13,8 @@
  * escape_availability.js (DAYS_AHEAD, …). DRY_RUN=true and ONLY_ROOMS=a,b do
  * the same as --dry-run and --rooms (used by the GitHub workflow).
  *
- * Exit code: 0 clean, 1 a room failed, 2 the site refused us, 3 still cooling
+ * Exit code: 0 clean, 1 a room failed or a Telegram message could not be
+ * delivered, 2 the site refused us, 3 still cooling
  * down after an earlier refusal (the site was not contacted).
  */
 import fs from "node:fs/promises";
@@ -82,7 +83,7 @@ async function run(argv, { roomOptions } = {}) {
   const { exitCodeFor, runWatch } = await import("./watcher.js");
   // A dry run neither reads nor changes what was last sent.
   const memory = args.dryRun ? {} : await readMemory(config.stateDir);
-  const report = await runWatch({ rooms, config, telegram, memory });
+  const report = await runWatch({ rooms, config, telegram, memory, expectDelivery: !args.dryRun });
   if (!args.dryRun) {
     await writeMemory(config.stateDir, memory, watchlist.rooms.map((room) => room.url));
   }
@@ -99,6 +100,12 @@ async function run(argv, { roomOptions } = {}) {
     `\nDone in ${Math.round(report.durationMs / 1000)} s: ${s.withFreeSlots} with free slots, ${s.nothingFree} with nothing free, ` +
       `${s.removed} removed, ${s.errors} failed${report.blocked ? `, STOPPED by the site with ${report.skipped.length} room(s) unchecked` : ""}.`,
   );
+  if (s.undelivered > 0) {
+    console.log(
+      `❌ ${s.undelivered} message(s) could not be sent to Telegram, so this run counts as failed. ` +
+        `Check the TELEGRAM_TOKEN and ONLY_CHAT_ID secrets. The messages are sent again on the next run.`,
+    );
+  }
 
   if (args.report) {
     await fs.mkdir(path.dirname(path.resolve(args.report)), { recursive: true });
